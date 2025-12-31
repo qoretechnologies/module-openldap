@@ -1,0 +1,48 @@
+dn: ou=people,dc=example,dc=com
+objectClass: organizationalUnit
+ou: people
+description: Test people organizational unit
+
+dn: ou=groups,dc=example,dc=com
+objectClass: organizationalUnit
+ou: groups
+description: Test groups organizational unit
+
+dn: uid=testuser1,ou=people,dc=example,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: testuser1
+cn: Test User 1
+sn: User1
+givenName: Test
+displayName: Test User 1
+mail: testuser1@example.com
+uidNumber: 10001
+gidNumber: 10001
+homeDirectory: /home/testuser1
+loginShell: /bin/bash
+userPassword: testpass1
+
+dn: uid=testuser2,ou=people,dc=example,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: testuser2
+cn: Test User 2
+sn: User2
+givenName: Test
+displayName: Test User 2
+mail: testuser2@example.com
+uidNumber: 10002
+gidNumber: 10002
+homeDirectory: /home/testuser2
+loginShell: /bin/bash
+userPassword: testpass2
+
+dn: cn=testgroup,ou=groups,dc=example,dc=com
+objectClass: posixGroup
+cn: testgroup
+gidNumber: 20001
+memberUid: testuser1
+memberUid: testuser2

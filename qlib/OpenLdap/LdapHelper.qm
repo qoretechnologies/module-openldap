@@ -1,0 +1,464 @@
+# -*- mode: qore; indent-tabs-mode: nil -*-
+#! @file LdapHelper.qm Qore OpenLDAP module helper classes
+
+/*  LdapHelper.qm Copyright 2024 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+%require-types
+%enable-all-warnings
+%new-style
+%strict-args
+
+module LdapHelper {
+    version = "1.0";
+    desc = "LDAP helper classes for entry management and search iteration";
+    author = "David Nichols <david@qore.org>";
+    url = "https://qore.org";
+    license = "MIT";
+}
+
+%requires openldap
+
+/** @mainpage LdapHelper Module
+
+    @section ldaphelperintro Introduction
+
+    This module provides helper classes for working with LDAP entries and
+    search results in a more object-oriented manner.
+
+    @section ldaphelper_classes Classes
+
+    - @ref LdapEntry - Represents a single LDAP entry with attribute access
+    - @ref LdapSearchIterator - Iterates over search results
+    - @ref LdapDn - Parses and manipulates Distinguished Names
+*/
+
+#! Represents a parsed LDAP Distinguished Name
+/**
+    @note This is a simple DN parser that handles basic DNs with comma-separated
+    components. It does NOT handle escaped characters according to RFC 4514.
+    DNs containing escaped commas (e.g., "CN=Smith\\, John,OU=Users,DC=example,DC=com")
+    will not be parsed correctly. For such cases, use the raw DN string directly
+    or implement custom parsing logic.
+*/
+public class LdapDn {
+    public {
+        #! The full DN string
+        string dn;
+        #! Parsed RDN components
+        list<hash<auto>> components = ();
+    }
+
+    #! Creates a new LdapDn from a DN string
+    /**
+        @param dn the distinguished name string
+    */
+    constructor(string dn) {
+        self.dn = dn;
+        parse();
+    }
+
+    #! Returns the Relative Distinguished Name (first component)
+    /**
+        @return the RDN string (e.g., "uid=testuser")
+    */
+    string getRdn() {
+        if (components.empty()) {
+            return "";
+        }
+        hash<auto> rdn = components[0];
+        return sprintf("%s=%s", rdn.type, rdn.value);
+    }
+
+    #! Returns the parent DN
+    /**
+        @return the parent DN string
+    */
+    string getParent() {
+        if (components.size() < 2) {
+            return "";
+        }
+        list<string> parts = ();
+        for (int i = 1; i < components.size(); i++) {
+            hash<auto> c = components[i];
+            parts += sprintf("%s=%s", c.type, c.value);
+        }
+        return parts.join(",");
+    }
+
+    #! Returns the value of the RDN
+    /**
+        @return the RDN value (e.g., "testuser" from "uid=testuser")
+    */
+    string getRdnValue() {
+        if (components.empty()) {
+            return "";
+        }
+        return components[0].value;
+    }
+
+    #! Returns the type of the RDN
+    /**
+        @return the RDN type (e.g., "uid" from "uid=testuser")
+    */
+    string getRdnType() {
+        if (components.empty()) {
+            return "";
+        }
+        return components[0].type;
+    }
+
+    #! Checks if this DN is a child of another DN
+    /**
+        @param parent the potential parent DN
+        @return True if this DN is a child of parent
+    */
+    bool isChildOf(string parent) {
+        return dn.find(parent) > 0;
+    }
+
+    #! Returns the string representation
+    string toString() {
+        return dn;
+    }
+
+    private parse() {
+        # Simple DN parser - handles basic DNs
+        list<string> parts = dn.split(",");
+        for (int i = 0; i < parts.size(); i++) {
+            string part = trim(parts[i]);
+            int eq = part.find("=");
+            if (eq > 0) {
+                components += {
+                    "type": trim(part.substr(0, eq)),
+                    "value": trim(part.substr(eq + 1)),
+                };
+            }
+        }
+    }
+}
+
+#! Represents a single LDAP entry with convenient attribute access
+public class LdapEntry {
+    public {
+        #! The Distinguished Name of the entry
+        string dn;
+        #! Parsed DN
+        LdapDn parsedDn;
+        #! The entry's attributes
+        hash<auto> attributes;
+    }
+
+    #! Creates a new LdapEntry
+    /**
+        @param dn the distinguished name
+        @param attributes the entry's attributes
+    */
+    constructor(string dn, hash<auto> attributes) {
+        self.dn = dn;
+        self.parsedDn = new LdapDn(dn);
+        self.attributes = attributes;
+    }
+
+    #! Gets an attribute value
+    /**
+        @param name the attribute name
+        @return the attribute value (string or list)
+    */
+    auto getAttribute(string name) {
+        return attributes{name};
+    }
+
+    #! Gets an attribute value as a string
+    /**
+        @param name the attribute name
+        @return the first value if multiple, or the single value
+    */
+    *string getAttributeString(string name) {
+        auto val = attributes{name};
+        if (!exists val) {
+            return NOTHING;
+        }
+        if (val.typeCode() == NT_LIST) {
+            return val[0];
+        }
+        return val;
+    }
+
+    #! Gets an attribute value as a list
+    /**
+        @param name the attribute name
+        @return the values as a list
+    */
+    list<auto> getAttributeList(string name) {
+        auto val = attributes{name};
+        if (!exists val) {
+            return ();
+        }
+        if (val.typeCode() == NT_LIST) {
+            return val;
+        }
+        return (val,);
+    }
+
+    #! Checks if the entry has an attribute
+    /**
+        @param name the attribute name
+        @return True if the attribute exists
+    */
+    bool hasAttribute(string name) {
+        return attributes.hasKey(name);
+    }
+
+    #! Gets all attribute names
+    /**
+        @return list of attribute names
+    */
+    list<string> getAttributeNames() {
+        return keys attributes;
+    }
+
+    #! Gets the RDN value
+    string getRdnValue() {
+        return parsedDn.getRdnValue();
+    }
+
+    #! Gets the RDN type
+    string getRdnType() {
+        return parsedDn.getRdnType();
+    }
+
+    #! Gets the parent DN
+    string getParent() {
+        return parsedDn.getParent();
+    }
+
+    #! Checks if entry has a specific objectClass
+    /**
+        @param objectClass the objectClass to check
+        @return True if the entry has the objectClass
+    */
+    bool hasObjectClass(string objectClass) {
+        auto ocs = attributes.objectClass ?? attributes.objectclass;
+        if (!exists ocs) {
+            return False;
+        }
+        if (ocs.typeCode() == NT_LIST) {
+            return inlist(objectClass, ocs) || inlist(objectClass.lwr(), map $1.lwr(), ocs);
+        }
+        return ocs == objectClass || ocs.lwr() == objectClass.lwr();
+    }
+
+    #! Returns a hash representation
+    hash<auto> toHash() {
+        return attributes + {"dn": dn};
+    }
+
+    #! Returns a string representation
+    string toString() {
+        return sprintf("LdapEntry(%s)", dn);
+    }
+}
+
+#! Iterator for LDAP search results
+/**
+    Provides memory-efficient iteration over search results by wrapping
+    the search result hash.
+*/
+public class LdapSearchIterator inherits AbstractIterator {
+    private {
+        hash<auto> results;
+        list<string> dnList;
+        int pos = -1;
+    }
+
+    #! Creates a new search iterator from search results
+    /**
+        @param results the hash returned from LdapClient::search()
+    */
+    constructor(hash<auto> results) {
+        self.results = results;
+        dnList = keys results;
+    }
+
+    #! Advances to the next entry
+    bool next() {
+        pos++;
+        return pos < dnList.size();
+    }
+
+    #! Gets the current entry as an LdapEntry object
+    LdapEntry getValue() {
+        if (pos < 0 || pos >= dnList.size()) {
+            throw "ITERATOR-ERROR", "iterator not at a valid position";
+        }
+        string dn = dnList[pos];
+        return new LdapEntry(dn, results{dn});
+    }
+
+    #! Checks if the iterator is valid
+    bool valid() {
+        return pos >= 0 && pos < dnList.size();
+    }
+
+    #! Resets the iterator
+    reset() {
+        pos = -1;
+    }
+
+    #! Returns the number of results
+    int size() {
+        return dnList.size();
+    }
+
+    #! Gets all entries as a list
+    list<LdapEntry> getAll() {
+        list<LdapEntry> entries = ();
+        foreach string dn in (dnList) {
+            entries += new LdapEntry(dn, results{dn});
+        }
+        return entries;
+    }
+}
+
+#! Extended LDAP client with helper methods
+public class LdapClientHelper {
+    private {
+        LdapClient client;
+    }
+
+    #! Creates a new helper wrapping an LdapClient
+    /**
+        @param uri the LDAP server URI
+        @param opts connection options
+    */
+    constructor(string uri, *hash<auto> opts) {
+        client = new LdapClient(uri, opts);
+    }
+
+    #! Creates a helper from an existing client
+    /**
+        @param client the LdapClient to wrap
+    */
+    constructor(LdapClient client) {
+        self.client = client;
+    }
+
+    #! Searches and returns an iterator
+    /**
+        @param searchOpts search options
+        @param timeout optional timeout
+        @return an iterator over the results
+    */
+    LdapSearchIterator searchIterator(hash<auto> searchOpts, *timeout timeout) {
+        hash<auto> results = client.search(searchOpts, timeout);
+        return new LdapSearchIterator(results);
+    }
+
+    #! Searches and returns LdapEntry objects
+    /**
+        @param searchOpts search options
+        @param timeout optional timeout
+        @return list of LdapEntry objects
+    */
+    list<LdapEntry> searchEntries(hash<auto> searchOpts, *timeout timeout) {
+        hash<auto> results = client.search(searchOpts, timeout);
+        list<LdapEntry> entries = ();
+        foreach string dn in (keys results) {
+            entries += new LdapEntry(dn, results{dn});
+        }
+        return entries;
+    }
+
+    #! Gets a single entry by DN
+    /**
+        @param dn the distinguished name
+        @param attributes optional list of attributes to retrieve
+        @param timeout optional timeout
+        @return the LdapEntry or NOTHING if not found
+    */
+    *LdapEntry getEntry(string dn, *softlist<string> attributes, *timeout timeout) {
+        hash<auto> opts = {
+            "base": dn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        };
+        if (exists attributes) {
+            opts.attributes = attributes;
+        }
+        hash<auto> results = client.search(opts, timeout);
+        if (results.hasKey(dn)) {
+            return new LdapEntry(dn, results{dn});
+        }
+        return NOTHING;
+    }
+
+    #! Checks if an entry exists
+    /**
+        @param dn the distinguished name
+        @param timeout optional timeout
+        @return True if the entry exists
+    */
+    bool entryExists(string dn, *timeout timeout) {
+        try {
+            hash<auto> results = client.search({
+                "base": dn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+                "attributes": "dn",
+            }, timeout);
+            return results.hasKey(dn);
+        } catch (hash<ExceptionInfo> ex) {
+            if (ex.err == "LDAP-RESULT-ERROR") {
+                return False;
+            }
+            rethrow;
+        }
+    }
+
+    #! Tests if the connection is alive
+    /**
+        @param timeout optional timeout
+        @return True if connection is working
+    */
+    bool ping(*timeout timeout) {
+        try {
+            client.search({
+                "base": "",
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            }, timeout ?? 5s);
+            return True;
+        } catch (hash<ExceptionInfo> ex) {
+            return False;
+        }
+    }
+
+    #! Returns the wrapped LdapClient
+    LdapClient getClient() {
+        return client;
+    }
+
+    #! Delegate method calls to the underlying client
+    auto methodGate(string method) {
+        return call_object_method_args(client, method, argv);
+    }
+}

@@ -1,10 +1,10 @@
-cmake_minimum_required(VERSION 3.0.0)
+cmake_minimum_required(VERSION 3.5...3.31)
 
 project(qore-openldap-module)
 
 set (VERSION_MAJOR 1)
-set (VERSION_MINOR 2)
-set (VERSION_PATCH 3)
+set (VERSION_MINOR 3)
+set (VERSION_PATCH 0)
 
 if (${VERSION_PATCH})
     set(PROJECT_VERSION "${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
