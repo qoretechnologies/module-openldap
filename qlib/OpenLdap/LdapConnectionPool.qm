@@ -103,6 +103,8 @@ public class LdapConnectionPool {
 
         #! Available connections
         list<hash<auto>> available = ();
+        #! In-use connections (tracked by object hash for validation)
+        hash<string, bool> activeConnections = {};
         #! In-use connections count
         int inUse = 0;
         #! Total connections created
@@ -192,6 +194,8 @@ public class LdapConnectionPool {
             if (available.size() > 0) {
                 hash<auto> connInfo = pop available;
                 inUse++;
+                string connId = getConnectionId(connInfo.connection);
+                activeConnections{connId} = True;
                 return connInfo.connection;
             }
 
@@ -199,6 +203,8 @@ public class LdapConnectionPool {
             if (totalCreated < poolOpts.max_connections) {
                 LdapClient conn = createConnectionLocked();
                 inUse++;
+                string connId = getConnectionId(conn);
+                activeConnections{connId} = True;
                 return conn;
             }
 
@@ -215,11 +221,22 @@ public class LdapConnectionPool {
     #! Releases a connection back to the pool
     /**
         @param conn the connection to release
+
+        @throw LDAP-POOL-ERROR if the connection was not obtained from this pool
     */
     release(LdapClient conn) {
         mutex.lock();
         on_exit mutex.unlock();
 
+        string connId = getConnectionId(conn);
+
+        # Validate that this connection was obtained from this pool
+        if (!activeConnections.hasKey(connId)) {
+            throw "LDAP-POOL-ERROR", "cannot release connection: connection was not obtained from this pool or was already released";
+        }
+
+        # Remove from active tracking
+        remove activeConnections{connId};
         inUse--;
 
         if (shutdown) {
@@ -293,7 +310,9 @@ public class LdapConnectionPool {
 
         shutdown = True;
         available = ();
+        activeConnections = {};
         totalCreated = 0;
+        inUse = 0;
 
         # Wake up any waiting threads
         cond.broadcast();
@@ -352,5 +371,11 @@ public class LdapConnectionPool {
         on_exit mutex.lock();
 
         return new LdapClient(uri, opts);
+    }
+
+    #! Returns a unique identifier for a connection object
+    private string getConnectionId(LdapClient conn) {
+        # Use the object's unique ID as the connection identifier
+        return sprintf("%s", conn.uniqueHash());
     }
 }

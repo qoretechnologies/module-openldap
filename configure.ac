@@ -1,7 +1,7 @@
 # Process this file with autoconf to produce a configure script.
 
 # AC_PREREQ(2.59)
-AC_INIT([qore-openldap-module], [1.2.4],
+AC_INIT([qore-openldap-module], [1.3],
         [David Nichols <david@qore.org>],
         [qore-openldap-module])
 AM_INIT_AUTOMAKE([no-dist-gzip dist-bzip2 tar-ustar])

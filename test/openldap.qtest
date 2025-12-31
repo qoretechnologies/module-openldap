@@ -8,6 +8,8 @@
 
 %requires openldap
 %requires QUnit
+%requires LdapHelper
+%requires LdapConnectionPool
 
 %exec-class OpenLdapTest
 
@@ -72,6 +74,16 @@ public class OpenLdapTest inherits QUnit::Test {
         addTestCase("UTF-8 encoding test", \testUtf8Encoding());
         addTestCase("Special characters test", \testSpecialCharacters());
         addTestCase("Multi-valued attributes test", \testMultiValuedAttributes());
+
+        # LdapHelper module tests
+        addTestCase("LdapDn test", \testLdapDn());
+        addTestCase("LdapEntry test", \testLdapEntry());
+        addTestCase("LdapSearchIterator test", \testLdapSearchIterator());
+        addTestCase("LdapClientHelper test", \testLdapClientHelper());
+
+        # LdapConnectionPool module tests
+        addTestCase("LdapConnectionPool test", \testConnectionPool());
+        addTestCase("LdapConnectionPool withConnection test", \testConnectionPoolWithConnection());
 
         set_return_value(main());
     }
@@ -962,5 +974,286 @@ public class OpenLdapTest inherits QUnit::Test {
 
         # cleanup
         ldap.del(testEntryDn);
+    }
+
+    #! Test LdapDn class
+    testLdapDn() {
+        # test basic DN parsing
+        {
+            LdapDn dn("uid=testuser,ou=people,dc=example,dc=com");
+            assertEq("uid=testuser,ou=people,dc=example,dc=com", dn.toString());
+            assertEq("uid=testuser", dn.getRdn());
+            assertEq("testuser", dn.getRdnValue());
+            assertEq("uid", dn.getRdnType());
+            assertEq("ou=people,dc=example,dc=com", dn.getParent());
+        }
+
+        # test CN-based DN
+        {
+            LdapDn dn("cn=Admin Group,ou=groups,dc=example,dc=com");
+            assertEq("cn=Admin Group", dn.getRdn());
+            assertEq("Admin Group", dn.getRdnValue());
+            assertEq("cn", dn.getRdnType());
+        }
+
+        # test single component DN
+        {
+            LdapDn dn("dc=com");
+            assertEq("dc=com", dn.getRdn());
+            assertEq("com", dn.getRdnValue());
+            assertEq("", dn.getParent());
+        }
+
+        # test isChildOf
+        {
+            LdapDn dn("uid=test,ou=people,dc=example,dc=com");
+            assertTrue(dn.isChildOf("dc=example,dc=com"));
+            assertTrue(dn.isChildOf("ou=people,dc=example,dc=com"));
+            assertFalse(dn.isChildOf("ou=groups,dc=example,dc=com"));
+        }
+    }
+
+    #! Test LdapEntry class
+    testLdapEntry() {
+        # create test entry data
+        hash<auto> attrs = {
+            "objectClass": ("inetOrgPerson", "posixAccount"),
+            "uid": "testuser",
+            "cn": "Test User",
+            "sn": "User",
+            "mail": ("test@example.com", "test2@example.com"),
+            "uidNumber": "1000",
+        };
+        string dn = "uid=testuser,ou=people,dc=example,dc=com";
+
+        LdapEntry entry(dn, attrs);
+
+        # test basic accessors
+        assertEq(dn, entry.dn);
+        assertEq("testuser", entry.getRdnValue());
+        assertEq("uid", entry.getRdnType());
+        assertEq("ou=people,dc=example,dc=com", entry.getParent());
+
+        # test getAttribute
+        assertEq("testuser", entry.getAttribute("uid"));
+        assertEq("Test User", entry.getAttribute("cn"));
+
+        # test getAttributeString (returns first value for multi-valued)
+        assertEq("test@example.com", entry.getAttributeString("mail"));
+
+        # test getAttributeList
+        list<auto> mails = entry.getAttributeList("mail");
+        assertEq(2, mails.size());
+        assertTrue(inlist("test@example.com", mails));
+        assertTrue(inlist("test2@example.com", mails));
+
+        # test hasAttribute
+        assertTrue(entry.hasAttribute("uid"));
+        assertTrue(entry.hasAttribute("cn"));
+        assertFalse(entry.hasAttribute("nonexistent"));
+
+        # test getAttributeNames
+        list<string> names = entry.getAttributeNames();
+        assertTrue(inlist("uid", names));
+        assertTrue(inlist("cn", names));
+        assertTrue(inlist("objectClass", names));
+
+        # test hasObjectClass
+        assertTrue(entry.hasObjectClass("inetOrgPerson"));
+        assertTrue(entry.hasObjectClass("posixAccount"));
+        assertFalse(entry.hasObjectClass("person"));
+
+        # test toHash
+        hash<auto> h = entry.toHash();
+        assertTrue(h.hasKey("dn"));
+        assertEq(dn, h.dn);
+    }
+
+    #! Test LdapSearchIterator class
+    testLdapSearchIterator() {
+        LdapClient ldap = getClient();
+
+        # perform a search
+        hash<auto> results = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_ONELEVEL,
+        });
+
+        # create iterator
+        LdapSearchIterator iter(results);
+
+        # test size
+        assertEq(results.size(), iter.size());
+
+        # test iteration
+        int count = 0;
+        while (iter.next()) {
+            assertTrue(iter.valid());
+            LdapEntry entry = iter.getValue();
+            assertEq(Type::Object, entry.type());
+            assertTrue(entry.dn.size() > 0);
+            count++;
+        }
+        assertEq(results.size(), count);
+
+        # test reset
+        iter.reset();
+        assertFalse(iter.valid());
+        assertTrue(iter.next());
+        assertTrue(iter.valid());
+
+        # test getAll
+        iter.reset();
+        list<LdapEntry> entries = iter.getAll();
+        assertEq(results.size(), entries.size());
+    }
+
+    #! Test LdapClientHelper class
+    testLdapClientHelper() {
+        LdapClientHelper helper(uri, {"binddn": binddn, "password": password});
+
+        # test ping
+        assertTrue(helper.ping());
+
+        # test entryExists
+        assertTrue(helper.entryExists(basedn));
+        assertFalse(helper.entryExists("cn=nonexistent,dc=invalid,dc=com"));
+
+        # test getEntry
+        {
+            *LdapEntry entry = helper.getEntry(basedn);
+            assertTrue(exists entry);
+            assertEq(basedn, entry.dn);
+        }
+
+        # test getEntry for non-existent
+        {
+            *LdapEntry entry = helper.getEntry("cn=nonexistent,dc=example,dc=com");
+            assertFalse(exists entry);
+        }
+
+        # test searchIterator
+        {
+            LdapSearchIterator iter = helper.searchIterator({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+            assertTrue(iter.size() >= 1);
+        }
+
+        # test searchEntries
+        {
+            list<LdapEntry> entries = helper.searchEntries({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+            assertTrue(entries.size() >= 1);
+        }
+
+        # test getClient
+        LdapClient client = helper.getClient();
+        assertEq(uri, client.getUri());
+    }
+
+    #! Test LdapConnectionPool basic operations
+    testConnectionPool() {
+        # test pool creation
+        LdapConnectionPool pool(uri, {"binddn": binddn, "password": password}, {
+            "min_connections": 1,
+            "max_connections": 3,
+        });
+
+        assertEq(uri, pool.getUri());
+
+        # test stats after creation
+        hash<auto> stats = pool.getStats();
+        assertEq(1, stats.min);
+        assertEq(3, stats.max);
+        assertTrue(stats.available >= 1);
+        assertEq(0, stats.in_use);
+
+        # test getting a connection
+        LdapClient conn1 = pool.get();
+        stats = pool.getStats();
+        assertEq(1, stats.in_use);
+
+        # verify connection works
+        hash<auto> result = conn1.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertEq(Type::Hash, result.type());
+
+        # test releasing connection
+        pool.release(conn1);
+        stats = pool.getStats();
+        assertEq(0, stats.in_use);
+        assertTrue(stats.available >= 1);
+
+        # test getting multiple connections
+        LdapClient c1 = pool.get();
+        LdapClient c2 = pool.get();
+        stats = pool.getStats();
+        assertEq(2, stats.in_use);
+
+        pool.release(c1);
+        pool.release(c2);
+
+        # test close
+        pool.close();
+    }
+
+    #! Test LdapConnectionPool withConnection pattern
+    testConnectionPoolWithConnection() {
+        LdapConnectionPool pool(uri, {"binddn": binddn, "password": password}, {
+            "min_connections": 1,
+            "max_connections": 5,
+        });
+
+        # test withConnection callback
+        pool.withConnection(sub(LdapClient ldap) {
+            hash<auto> result = ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+            assertEq(Type::Hash, result.type());
+        });
+
+        # verify connection was returned to pool
+        hash<auto> stats = pool.getStats();
+        assertEq(0, stats.in_use);
+
+        # test withConnectionResult
+        hash<auto> result = pool.withConnectionResult(sub(LdapClient ldap) {
+            return ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+        });
+        assertEq(Type::Hash, result.type());
+
+        # test exception handling in withConnection
+        bool exceptionThrown = False;
+        try {
+            pool.withConnection(sub(LdapClient ldap) {
+                throw "TEST-ERROR", "test exception";
+            });
+        } catch (hash<ExceptionInfo> ex) {
+            exceptionThrown = True;
+            assertEq("TEST-ERROR", ex.err);
+        }
+        assertTrue(exceptionThrown);
+
+        # verify connection was still returned despite exception
+        stats = pool.getStats();
+        assertEq(0, stats.in_use);
+
+        pool.close();
     }
 }

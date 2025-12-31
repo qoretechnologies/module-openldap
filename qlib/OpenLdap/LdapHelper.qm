@@ -52,6 +52,13 @@ module LdapHelper {
 */
 
 #! Represents a parsed LDAP Distinguished Name
+/**
+    @note This is a simple DN parser that handles basic DNs with comma-separated
+    components. It does NOT handle escaped characters according to RFC 4514.
+    DNs containing escaped commas (e.g., "CN=Smith\\, John,OU=Users,DC=example,DC=com")
+    will not be parsed correctly. For such cases, use the raw DN string directly
+    or implement custom parsing logic.
+*/
 public class LdapDn {
     public {
         #! The full DN string
