@@ -1229,7 +1229,7 @@ public class OpenLdapTest inherits QUnit::Test {
         assertEq(0, stats.in_use);
 
         # test withConnectionResult
-        hash<auto> result = pool.withConnectionResult(sub(LdapClient ldap) {
+        hash<auto> result = pool.withConnectionResult(hash<auto> sub(LdapClient ldap) {
             return ldap.search({
                 "base": basedn,
                 "filter": "(objectClass=*)",
