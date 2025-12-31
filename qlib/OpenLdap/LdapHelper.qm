@@ -144,12 +144,12 @@ public class LdapDn {
         # Simple DN parser - handles basic DNs
         list<string> parts = dn.split(",");
         for (int i = 0; i < parts.size(); i++) {
-            string part = parts[i].trim();
+            string part = trim(parts[i]);
             int eq = part.find("=");
             if (eq > 0) {
                 components += {
-                    "type": part.substr(0, eq).trim(),
-                    "value": part.substr(eq + 1).trim(),
+                    "type": trim(part.substr(0, eq)),
+                    "value": trim(part.substr(eq + 1)),
                 };
             }
         }
