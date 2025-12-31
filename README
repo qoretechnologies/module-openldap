@@ -20,26 +20,44 @@ COPYING.LGPL and COPYING.MIT for more information
 
 BUILDING
 --------
-Requires qore 0.8.7+ and openssl headers and libraries to build and run
+Requires qore 1.12.4+ and openldap headers and libraries to build and run.
 
-to configure the build, execute
-        configure --disable-debug
+CMake Build (Recommended)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=release
+make
+make install
 
-if the qore library cannot be found, then you can use:
-        configure --disable-debug --with-qore=<dir>
+If the qore library cannot be found, you can specify QORE_DIR:
+cmake .. -DQORE_DIR=<dir>
 
-if the openldap library or headers cannot be found, then you can use:
-        configure --disable-debug --with-openldap=<dir>
+If the openldap library or headers cannot be found, you can specify OpenLDAP_DIR:
+cmake .. -DOpenLDAP_DIR=<dir>
 
-(or set the OPENLDAP_DIR environment variable before callinf configure)
+
+Autotools Build (Legacy)
+~~~~~~~~~~~~~~~~~~~~~~~~
+To configure the build, execute:
+        ./configure --disable-debug
+
+If the qore library cannot be found, then you can use:
+        ./configure --disable-debug --with-qore=<dir>
+
+If the openldap library or headers cannot be found, then you can use:
+        ./configure --disable-debug --with-openldap=<dir>
+
+(or set the OPENLDAP_DIR environment variable before calling configure)
 
 The qore binary also needs to be in the path so configure can determine the module directory
 
-Then execute
-
-make && make install
+Then execute:
+        make && make install
 
 (or 'make && sudo make install' as needed)
 
-please direct any questions to:
+
+QUESTIONS
+---------
+Please direct any questions to:
 david@qore.org

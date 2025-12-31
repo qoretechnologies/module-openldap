@@ -1,4 +1,4 @@
-%define mod_ver 1.2.3
+%define mod_ver 1.2.4
 %define module_api %(qore --latest-module-api 2>/dev/null)
 %define module_dir %{_libdir}/qore-modules
 
@@ -105,6 +105,14 @@ rm -rf $RPM_BUILD_ROOT
 %doc COPYING.MIT COPYING.LGPL README RELEASE-NOTES AUTHORS
 
 %changelog
+* Tue Dec 31 2024 David Nichols <david@qore.org> 1.2.4
+- updated to version 1.2.4
+- fixed unreachable code in del() method
+- fixed return type issues in compare() and isSecure() methods
+- added NULL check for ldap_get_dn() result
+- added comprehensive automated test suite
+- added LdapConnectionPool and LdapHelper Qore modules
+
 * Sat Dec 17 2022 David Nichols <david@qore.org> 1.2.3
 - updated to version 1.2.3
 - updated to use cmake

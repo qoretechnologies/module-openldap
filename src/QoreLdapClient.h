@@ -4,7 +4,7 @@
 
     Qore Programming Language
 
-    Copyright 2012 - 2018 Qore Technologies, s.r.o.
+    Copyright 2012 - 2024 Qore Technologies, s.r.o.
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -207,6 +207,8 @@ public:
                     return;
                 }
             }
+            // null-terminate the array
+            mod_values[l->size()] = 0;
         }
         else {
             mod_values = new char*[2];
@@ -371,9 +373,7 @@ public:
         if (!ec) {
             initialized = true;
         }
-        else {
-            printf("error while ldap initialization: %d\n", ec);
-        }
+        // error code is returned and handled by caller (checkLibrary)
         return ec;
     }
 
@@ -727,7 +727,7 @@ public:
     DLLLOCAL bool isSecure(ExceptionSink* xsink) {
         AutoLocker al(m);
         if (checkValidIntern("isSecure", xsink))
-            return -1;
+            return false;
 
         return ldap_tls_inplace(ldp);
     }
@@ -826,8 +826,14 @@ public:
                 ber_free(ber, 0);
 
             char* p = ldap_get_dn(ldp, e);
-            h->setKeyValue(p, he.release(), 0);
-            ldap_memfree(p);
+            if (p) {
+                h->setKeyValue(p, he.release(), 0);
+                ldap_memfree(p);
+            } else {
+                // use a generated key if DN cannot be retrieved
+                QoreStringMaker key("<entry-%d>", i);
+                h->setKeyValue(key.c_str(), he.release(), 0);
+            }
         }
 
         return h.release();
@@ -914,31 +920,29 @@ public:
         }
 
         return checkFreeResult("del", "ldap_delete_ext", res, xsink);
-
-        return 0;
     }
 
     DLLLOCAL bool compare(ExceptionSink* xsink, const QoreStringNode* dn, const QoreStringNode* attr, const QoreListNode* vl, int my_timeout_ms = 0) {
         // convert strings to UTF-8 if necessary
         QoreStringValueHelper dnstr(dn, QCS_UTF8, xsink);
         if (*xsink)
-            return -1;
+            return false;
 
         QoreStringValueHelper attrstr(attr, QCS_UTF8, xsink);
         if (*xsink)
-            return -1;
+            return false;
 
         BervalListHelper bval(vl, xsink);
         if (*xsink)
-            return -1;
+            return false;
 
         AutoLocker al(m);
         if (checkValidIntern("compare", xsink))
-            return -1;
+            return false;
 
         int msgid;
         if (checkLdapError("compare", "ldap_compare_ext", ldap_compare_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), attrstr->empty() ? 0 : attrstr->getBuffer(), **bval, 0, 0, &msgid), xsink))
-            return -1;
+            return false;
 
         LDAPMessage* res = 0;
         TimeoutHelper timeout(my_timeout_ms);
@@ -950,7 +954,7 @@ public:
 
         QoreLdapParseResultHelper prh("compare", "ldap_compare_ext", this, res, xsink);
         if (*xsink)
-            return -1;
+            return false;
 
         int rc = prh.getError();
         if (rc == LDAP_COMPARE_TRUE)

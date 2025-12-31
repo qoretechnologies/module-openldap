@@ -1,0 +1,356 @@
+# -*- mode: qore; indent-tabs-mode: nil -*-
+#! @file LdapConnectionPool.qm Qore OpenLDAP module connection pool implementation
+
+/*  LdapConnectionPool.qm Copyright 2024 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+%require-types
+%enable-all-warnings
+%new-style
+%strict-args
+
+module LdapConnectionPool {
+    version = "1.0";
+    desc = "LDAP connection pool implementation";
+    author = "David Nichols <david@qore.org>";
+    url = "https://qore.org";
+    license = "MIT";
+}
+
+%requires openldap
+
+/** @mainpage LdapConnectionPool Module
+
+    @section ldapconnectionpoolintro Introduction
+
+    This module provides a connection pool implementation for LDAP connections,
+    allowing efficient reuse of connections in multi-threaded applications.
+
+    @section ldapconnectionpool_example Example Usage
+
+    @code{.qore}
+%new-style
+%require-types
+%strict-args
+
+%requires LdapConnectionPool
+
+# Create a connection pool
+LdapConnectionPool pool("ldap://localhost:389", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+    "timeout": 30s,
+}, {
+    "min_connections": 2,
+    "max_connections": 10,
+    "idle_timeout": 300s,
+});
+
+# Get a connection from the pool
+LdapClient ldap = pool.get();
+
+# Use the connection
+hash<auto> result = ldap.search({"base": "dc=example,dc=com", "filter": "(objectClass=*)"});
+
+# Return the connection to the pool
+pool.release(ldap);
+
+# Or use the callback pattern
+pool.withConnection(sub(LdapClient ldap) {
+    hash<auto> result = ldap.search({"base": "dc=example,dc=com", "filter": "(objectClass=*)"});
+});
+    @endcode
+*/
+
+#! LDAP connection pool for efficient connection reuse
+public class LdapConnectionPool {
+    public {
+        #! Default minimum number of connections
+        const DefaultMinConnections = 1;
+        #! Default maximum number of connections
+        const DefaultMaxConnections = 10;
+        #! Default idle timeout in seconds
+        const DefaultIdleTimeout = 300s;
+        #! Default wait timeout for getting a connection
+        const DefaultWaitTimeout = 30s;
+    }
+
+    private {
+        #! LDAP URI
+        string uri;
+        #! Connection options
+        hash<auto> opts;
+        #! Pool options
+        hash<auto> poolOpts;
+
+        #! Available connections
+        list<hash<auto>> available = ();
+        #! In-use connections count
+        int inUse = 0;
+        #! Total connections created
+        int totalCreated = 0;
+
+        #! Mutex for thread safety
+        Mutex mutex();
+        #! Condition for waiting
+        Condition cond();
+
+        #! Shutdown flag
+        bool shutdown = False;
+    }
+
+    #! Creates a new LDAP connection pool
+    /**
+        @param uri the LDAP server URI
+        @param opts connection options (same as LdapClient constructor)
+        @param poolOpts pool configuration options:
+        - \c min_connections: minimum number of connections to maintain (default: 1)
+        - \c max_connections: maximum number of connections (default: 10)
+        - \c idle_timeout: time before idle connections are closed (default: 300s)
+        - \c wait_timeout: max time to wait for a connection (default: 30s)
+    */
+    constructor(string uri, *hash<auto> opts, *hash<auto> poolOpts) {
+        self.uri = uri;
+        self.opts = opts ?? {};
+        self.poolOpts = poolOpts ?? {};
+
+        # Set defaults
+        if (!self.poolOpts.hasKey("min_connections")) {
+            self.poolOpts.min_connections = DefaultMinConnections;
+        }
+        if (!self.poolOpts.hasKey("max_connections")) {
+            self.poolOpts.max_connections = DefaultMaxConnections;
+        }
+        if (!self.poolOpts.hasKey("idle_timeout")) {
+            self.poolOpts.idle_timeout = DefaultIdleTimeout;
+        }
+        if (!self.poolOpts.hasKey("wait_timeout")) {
+            self.poolOpts.wait_timeout = DefaultWaitTimeout;
+        }
+
+        # Validate configuration
+        if (self.poolOpts.min_connections < 0) {
+            throw "LDAP-POOL-ERROR", "min_connections cannot be negative";
+        }
+        if (self.poolOpts.max_connections < 1) {
+            throw "LDAP-POOL-ERROR", "max_connections must be at least 1";
+        }
+        if (self.poolOpts.min_connections > self.poolOpts.max_connections) {
+            throw "LDAP-POOL-ERROR", "min_connections cannot exceed max_connections";
+        }
+
+        # Pre-create minimum connections
+        for (int i = 0; i < self.poolOpts.min_connections; i++) {
+            createConnection();
+        }
+    }
+
+    #! Destructor - closes all connections
+    destructor() {
+        close();
+    }
+
+    #! Gets a connection from the pool
+    /**
+        @param timeout optional timeout override
+        @return an LdapClient connection
+
+        @throw LDAP-POOL-TIMEOUT no connection available within timeout
+        @throw LDAP-POOL-SHUTDOWN pool has been shut down
+    */
+    LdapClient get(*timeout timeout) {
+        timeout = timeout ?? poolOpts.wait_timeout;
+        date deadline = now_us() + timeout;
+
+        mutex.lock();
+        on_exit mutex.unlock();
+
+        while (True) {
+            if (shutdown) {
+                throw "LDAP-POOL-SHUTDOWN", "connection pool has been shut down";
+            }
+
+            # Try to get an available connection
+            if (available.size() > 0) {
+                hash<auto> connInfo = pop available;
+                inUse++;
+                return connInfo.connection;
+            }
+
+            # Try to create a new connection if under limit
+            if (totalCreated < poolOpts.max_connections) {
+                LdapClient conn = createConnectionLocked();
+                inUse++;
+                return conn;
+            }
+
+            # Wait for a connection to become available
+            date remaining = deadline - now_us();
+            if (remaining <= 0ms) {
+                throw "LDAP-POOL-TIMEOUT", sprintf("timeout waiting for connection (timeout: %y)", timeout);
+            }
+
+            cond.wait(mutex, remaining);
+        }
+    }
+
+    #! Releases a connection back to the pool
+    /**
+        @param conn the connection to release
+    */
+    release(LdapClient conn) {
+        mutex.lock();
+        on_exit mutex.unlock();
+
+        inUse--;
+
+        if (shutdown) {
+            # Don't return to pool if shutting down
+            return;
+        }
+
+        # Return to pool
+        available += {
+            "connection": conn,
+            "last_used": now_us(),
+        };
+
+        # Signal waiting threads
+        cond.signal();
+    }
+
+    #! Executes a callback with a pooled connection
+    /**
+        @param callback the callback to execute with the connection
+
+        The connection is automatically returned to the pool after the callback
+        completes, even if an exception is thrown.
+    */
+    withConnection(code callback) {
+        LdapClient conn = get();
+        on_exit release(conn);
+        callback(conn);
+    }
+
+    #! Executes a callback with a pooled connection and returns the result
+    /**
+        @param callback the callback to execute with the connection
+        @return the return value of the callback
+
+        The connection is automatically returned to the pool after the callback
+        completes, even if an exception is thrown.
+    */
+    auto withConnectionResult(code callback) {
+        LdapClient conn = get();
+        on_exit release(conn);
+        return callback(conn);
+    }
+
+    #! Returns pool statistics
+    /**
+        @return a hash with pool statistics:
+        - \c available: number of available connections
+        - \c in_use: number of connections in use
+        - \c total: total number of connections
+        - \c min: minimum configured connections
+        - \c max: maximum configured connections
+    */
+    hash<auto> getStats() {
+        mutex.lock();
+        on_exit mutex.unlock();
+
+        return {
+            "available": available.size(),
+            "in_use": inUse,
+            "total": totalCreated,
+            "min": poolOpts.min_connections,
+            "max": poolOpts.max_connections,
+        };
+    }
+
+    #! Closes all connections and shuts down the pool
+    close() {
+        mutex.lock();
+        on_exit mutex.unlock();
+
+        shutdown = True;
+        available = ();
+        totalCreated = 0;
+
+        # Wake up any waiting threads
+        cond.broadcast();
+    }
+
+    #! Returns the LDAP URI
+    string getUri() {
+        return uri;
+    }
+
+    #! Removes idle connections that have exceeded the idle timeout
+    /**
+        Call this periodically to clean up idle connections.
+        Returns the number of connections removed.
+    */
+    int cleanupIdleConnections() {
+        mutex.lock();
+        on_exit mutex.unlock();
+
+        date cutoff = now_us() - poolOpts.idle_timeout;
+        int removed = 0;
+
+        list<hash<auto>> keep = ();
+        for (int i = 0; i < available.size(); i++) {
+            hash<auto> connInfo = available[i];
+            # Keep if not expired or if we need to maintain minimum
+            if (connInfo.last_used > cutoff || (keep.size() + inUse) < poolOpts.min_connections) {
+                keep += connInfo;
+            } else {
+                removed++;
+                totalCreated--;
+            }
+        }
+        available = keep;
+
+        return removed;
+    }
+
+    private LdapClient createConnection() {
+        LdapClient conn(uri, opts);
+        mutex.lock();
+        on_exit mutex.unlock();
+
+        totalCreated++;
+        available += {
+            "connection": conn,
+            "last_used": now_us(),
+        };
+        return conn;
+    }
+
+    private LdapClient createConnectionLocked() {
+        # Note: mutex must already be held
+        totalCreated++;
+        mutex.unlock();
+        on_exit mutex.lock();
+
+        return new LdapClient(uri, opts);
+    }
+}

@@ -1,0 +1,966 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+
+%new-style
+%strict-args
+%require-types
+%enable-all-warnings
+
+%requires openldap
+%requires QUnit
+
+%exec-class OpenLdapTest
+
+#! OpenLDAP module test suite
+public class OpenLdapTest inherits QUnit::Test {
+    public {
+        # LDAP connection settings - can be overridden with environment variables
+        const DefaultUri = "ldap://localhost:389";
+        const DefaultBindDn = "cn=admin,dc=example,dc=com";
+        const DefaultPassword = "admin";
+        const DefaultBaseDn = "dc=example,dc=com";
+        const DefaultPeopleDn = "ou=people,dc=example,dc=com";
+        const DefaultGroupsDn = "ou=groups,dc=example,dc=com";
+
+        string uri;
+        string binddn;
+        string password;
+        string basedn;
+        string peopledn;
+        string groupsdn;
+
+        # test entry DN for add/modify/delete tests
+        string testEntryDn;
+    }
+
+    constructor() : Test("OpenLdapTest", "1.0") {
+        # get connection settings from environment or use defaults
+        uri = ENV.LDAP_URI ?? DefaultUri;
+        binddn = ENV.LDAP_BINDDN ?? DefaultBindDn;
+        password = ENV.LDAP_PASSWORD ?? DefaultPassword;
+        basedn = ENV.LDAP_BASEDN ?? DefaultBaseDn;
+        peopledn = ENV.LDAP_PEOPLEDN ?? DefaultPeopleDn;
+        groupsdn = ENV.LDAP_GROUPSDN ?? DefaultGroupsDn;
+
+        testEntryDn = "uid=qoretest,ou=people,dc=example,dc=com";
+
+        # Core functionality tests
+        addTestCase("LdapClient::getInfo() test", \testGetInfo());
+        addTestCase("LdapClient constructor test", \testConstructor());
+        addTestCase("LdapClient constructor negative tests", \testConstructorNegative());
+        addTestCase("LdapClient::getUri() test", \testGetUri());
+        addTestCase("LdapClient::isSecure() test", \testIsSecure());
+        addTestCase("LdapClient::bind() test", \testBind());
+        addTestCase("LdapClient::bind() negative tests", \testBindNegative());
+        addTestCase("LdapClient::search() test", \testSearch());
+        addTestCase("LdapClient::search() corner cases", \testSearchCornerCases());
+        addTestCase("LdapClient::search() negative tests", \testSearchNegative());
+        addTestCase("LdapClient::add() test", \testAdd());
+        addTestCase("LdapClient::add() negative tests", \testAddNegative());
+        addTestCase("LdapClient::modify() test", \testModify());
+        addTestCase("LdapClient::modify() corner cases", \testModifyCornerCases());
+        addTestCase("LdapClient::modify() negative tests", \testModifyNegative());
+        addTestCase("LdapClient::compare() test", \testCompare());
+        addTestCase("LdapClient::compare() negative tests", \testCompareNegative());
+        addTestCase("LdapClient::rename() test", \testRename());
+        addTestCase("LdapClient::rename() negative tests", \testRenameNegative());
+        addTestCase("LdapClient::del() test", \testDel());
+        addTestCase("LdapClient::del() negative tests", \testDelNegative());
+        addTestCase("LdapClient::copy() test", \testCopy());
+        addTestCase("Constants test", \testConstants());
+        addTestCase("Timeout test", \testTimeout());
+        addTestCase("UTF-8 encoding test", \testUtf8Encoding());
+        addTestCase("Special characters test", \testSpecialCharacters());
+        addTestCase("Multi-valued attributes test", \testMultiValuedAttributes());
+
+        set_return_value(main());
+    }
+
+    private LdapClient getClient() {
+        return new LdapClient(uri, {"binddn": binddn, "password": password});
+    }
+
+    private cleanupTestEntry() {
+        try {
+            LdapClient ldap = getClient();
+            ldap.del(testEntryDn);
+        } catch (hash<ExceptionInfo> ex) {
+            # ignore - entry may not exist
+        }
+    }
+
+    private createTestEntry() {
+        cleanupTestEntry();
+        LdapClient ldap = getClient();
+        hash<auto> attrs = {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest",
+            "cn": "Qore Test User",
+            "sn": "Test",
+            "givenName": "Qore",
+            "displayName": "Qore Test User",
+            "mail": "qoretest@example.com",
+            "uidNumber": "99999",
+            "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+            "loginShell": "/bin/bash",
+            "userPassword": "testpassword",
+        };
+        ldap.add(testEntryDn, attrs);
+    }
+
+    #! Test LdapClient::getInfo() static method
+    testGetInfo() {
+        hash<auto> info = LdapClient::getInfo();
+        assertEq(Type::Hash, info.type());
+        assertTrue(info.hasKey("ApiVersion"));
+        assertTrue(info.hasKey("VendorName"));
+        assertTrue(info.hasKey("VendorVersion"));
+        assertTrue(info.hasKey("Extensions"));
+        assertEq(Type::List, info.Extensions.type());
+
+        # verify ApiVersion is a positive integer
+        assertTrue(info.ApiVersion > 0);
+
+        # verify VendorName is a non-empty string
+        assertTrue(info.VendorName.size() > 0);
+    }
+
+    #! Test LdapClient constructor
+    testConstructor() {
+        # test basic constructor without bind
+        {
+            LdapClient ldap(uri);
+            assertEq(uri, ldap.getUri());
+        }
+
+        # test constructor with bind options
+        {
+            hash<auto> opts = {
+                "binddn": binddn,
+                "password": password,
+                "timeout": 30s,
+            };
+            LdapClient ldap(uri, opts);
+            assertEq(uri, ldap.getUri());
+        }
+
+        # test constructor with all options
+        {
+            hash<auto> opts = {
+                "binddn": binddn,
+                "password": password,
+                "timeout": 30s,
+                "protocol": 3,
+                "no-referrals": True,
+            };
+            LdapClient ldap(uri, opts);
+            assertEq(uri, ldap.getUri());
+        }
+
+        # test constructor with empty options hash
+        {
+            LdapClient ldap(uri, {});
+            assertEq(uri, ldap.getUri());
+        }
+    }
+
+    #! Test LdapClient constructor negative cases
+    testConstructorNegative() {
+        # test constructor with invalid URI (unreachable host)
+        assertThrows("LDAP-ERROR", sub() {
+            new LdapClient("ldap://invalid.host.that.does.not.exist.anywhere:12345");
+        });
+
+        # test constructor with malformed URI
+        assertThrows("LDAP-ERROR", sub() {
+            new LdapClient("not-a-valid-uri");
+        });
+
+        # test constructor with invalid port
+        assertThrows("LDAP-ERROR", sub() {
+            new LdapClient("ldap://localhost:99999");
+        });
+    }
+
+    #! Test LdapClient::getUri() method
+    testGetUri() {
+        LdapClient ldap(uri, {"binddn": binddn, "password": password});
+        assertEq(uri, ldap.getUri());
+        assertEq(Type::String, ldap.getUri().type());
+    }
+
+    #! Test LdapClient::isSecure() method
+    testIsSecure() {
+        # test non-secure connection
+        LdapClient ldap(uri, {"binddn": binddn, "password": password});
+        bool secure = ldap.isSecure();
+        assertEq(Type::Boolean, secure.type());
+        # non-TLS connection should return false
+        assertFalse(secure);
+    }
+
+    #! Test LdapClient::bind() method
+    testBind() {
+        LdapClient ldap(uri);
+
+        # test bind with valid credentials
+        ldap.bind({"binddn": binddn, "password": password});
+
+        # test re-bind with same credentials (should work)
+        ldap.bind({"binddn": binddn, "password": password});
+    }
+
+    #! Test LdapClient::bind() negative cases
+    testBindNegative() {
+        LdapClient ldap(uri);
+
+        # test bind with invalid password
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.bind({"binddn": binddn, "password": "wrongpassword"});
+        });
+
+        # test bind with non-existent user
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.bind({"binddn": "cn=nonexistent,dc=example,dc=com", "password": "anypassword"});
+        });
+
+        # test bind with missing binddn but with password
+        assertThrows("LDAP-BIND-ERROR", sub() {
+            ldap.bind({"password": "somepassword"});
+        });
+
+        # test bind with empty binddn
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.bind({"binddn": "", "password": "somepassword"});
+        });
+    }
+
+    #! Test LdapClient::search() method
+    testSearch() {
+        LdapClient ldap = getClient();
+
+        # test basic search at base
+        {
+            hash<auto> result = ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+            assertEq(Type::Hash, result.type());
+            assertTrue(result.size() >= 1);
+        }
+
+        # test search with attributes filter
+        {
+            hash<auto> result = ldap.search({
+                "base": peopledn,
+                "filter": "(objectClass=inetOrgPerson)",
+                "attributes": ("uid", "cn", "mail"),
+                "scope": LDAP_SCOPE_SUBTREE,
+            });
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test search with single attribute as string
+        {
+            hash<auto> result = ldap.search({
+                "base": peopledn,
+                "filter": "(uid=testuser1)",
+                "attributes": "uid",
+                "scope": LDAP_SCOPE_SUBTREE,
+            });
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test search with ONELEVEL scope
+        {
+            hash<auto> result = ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_ONELEVEL,
+            });
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test search with SUBTREE scope
+        {
+            hash<auto> result = ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_SUBTREE,
+            });
+            assertEq(Type::Hash, result.type());
+            assertTrue(result.size() >= 1);
+        }
+    }
+
+    #! Test LdapClient::search() corner cases
+    testSearchCornerCases() {
+        LdapClient ldap = getClient();
+
+        # test search with no results
+        {
+            hash<auto> result = ldap.search({
+                "base": peopledn,
+                "filter": "(uid=nonexistentuser12345)",
+                "scope": LDAP_SCOPE_SUBTREE,
+            });
+            assertEq(Type::Hash, result.type());
+            assertEq(0, result.size());
+        }
+
+        # test search with complex filter (AND)
+        {
+            hash<auto> result = ldap.search({
+                "base": peopledn,
+                "filter": "(&(objectClass=inetOrgPerson)(uid=testuser1))",
+                "scope": LDAP_SCOPE_SUBTREE,
+            });
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test search with complex filter (OR)
+        {
+            hash<auto> result = ldap.search({
+                "base": peopledn,
+                "filter": "(|(uid=testuser1)(uid=testuser2))",
+                "scope": LDAP_SCOPE_SUBTREE,
+            });
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test search with wildcard filter
+        {
+            hash<auto> result = ldap.search({
+                "base": peopledn,
+                "filter": "(uid=test*)",
+                "scope": LDAP_SCOPE_SUBTREE,
+            });
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test search with empty base (root DSE)
+        {
+            hash<auto> result = ldap.search({
+                "base": "",
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test search with empty attributes list (return all)
+        {
+            hash<auto> result = ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+                "attributes": (),
+            });
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test search with timeout parameter
+        {
+            hash<auto> result = ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            }, 30s);
+            assertEq(Type::Hash, result.type());
+        }
+    }
+
+    #! Test LdapClient::search() negative cases
+    testSearchNegative() {
+        LdapClient ldap = getClient();
+
+        # test search with invalid base DN
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.search({
+                "base": "dc=nonexistent,dc=domain,dc=invalid",
+                "filter": "(objectClass=*)",
+            });
+        });
+
+        # test search with invalid filter syntax
+        assertThrows("LDAP-ERROR", sub() {
+            ldap.search({
+                "base": basedn,
+                "filter": "this is not a valid filter",
+            });
+        });
+
+        # test search with unbalanced parentheses in filter
+        assertThrows("LDAP-ERROR", sub() {
+            ldap.search({
+                "base": basedn,
+                "filter": "((objectClass=*)",
+            });
+        });
+
+        # test search with invalid attributes type
+        assertThrows("LDAPCLIENT-SEARCH-ERROR", sub() {
+            ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "attributes": 12345,  # should be string or list
+            });
+        });
+    }
+
+    #! Test LdapClient::add() method
+    testAdd() {
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+
+        # test adding a new entry
+        hash<auto> attrs = {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest",
+            "cn": "Qore Test User",
+            "sn": "Test",
+            "givenName": "Qore",
+            "displayName": "Qore Test User",
+            "mail": "qoretest@example.com",
+            "uidNumber": "99999",
+            "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+            "loginShell": "/bin/bash",
+            "userPassword": "testpassword",
+        };
+
+        ldap.add(testEntryDn, attrs);
+
+        # verify the entry was added
+        hash<auto> result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(result.hasKey(testEntryDn));
+        assertEq("qoretest", result{testEntryDn}.uid);
+        assertEq("Qore Test User", result{testEntryDn}.cn);
+    }
+
+    #! Test LdapClient::add() negative cases
+    testAddNegative() {
+        LdapClient ldap = getClient();
+
+        # ensure test entry exists
+        createTestEntry();
+
+        # test adding duplicate entry
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.add(testEntryDn, {
+                "objectClass": "inetOrgPerson",
+                "uid": "qoretest",
+                "cn": "Duplicate",
+                "sn": "Test",
+            });
+        });
+
+        # test adding entry to non-existent parent
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.add("uid=test,ou=nonexistent,dc=example,dc=com", {
+                "objectClass": "inetOrgPerson",
+                "uid": "test",
+                "cn": "Test",
+                "sn": "Test",
+            });
+        });
+
+        # test adding entry with missing required attribute
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.add("uid=incomplete,ou=people,dc=example,dc=com", {
+                "objectClass": "inetOrgPerson",
+                "uid": "incomplete",
+                # missing required 'sn' and 'cn' attributes
+            });
+        });
+
+        # test adding entry with invalid objectClass
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.add("uid=invalid,ou=people,dc=example,dc=com", {
+                "objectClass": "nonExistentObjectClass",
+                "uid": "invalid",
+            });
+        });
+    }
+
+    #! Test LdapClient::modify() method
+    testModify() {
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        # test modifying an attribute (replace)
+        ldap.modify(testEntryDn, {
+            "mod": LDAP_MOD_REPLACE,
+            "attr": "displayName",
+            "value": "Modified Qore Test User",
+        });
+
+        # verify the modification
+        hash<auto> result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertEq("Modified Qore Test User", result{testEntryDn}.displayName);
+
+        # test adding an attribute value
+        ldap.modify(testEntryDn, {
+            "mod": LDAP_MOD_ADD,
+            "attr": "description",
+            "value": "Test description",
+        });
+
+        result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertEq("Test description", result{testEntryDn}.description);
+
+        # test deleting an attribute
+        ldap.modify(testEntryDn, {
+            "mod": LDAP_MOD_DELETE,
+            "attr": "description",
+        });
+
+        result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertFalse(result{testEntryDn}.hasKey("description"));
+    }
+
+    #! Test LdapClient::modify() corner cases
+    testModifyCornerCases() {
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        # test multiple modifications in one call
+        ldap.modify(testEntryDn, (
+            {"mod": LDAP_MOD_REPLACE, "attr": "givenName", "value": "UpdatedQore"},
+            {"mod": LDAP_MOD_ADD, "attr": "telephoneNumber", "value": "123-456-7890"},
+        ));
+
+        hash<auto> result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertEq("UpdatedQore", result{testEntryDn}.givenName);
+        assertEq("123-456-7890", result{testEntryDn}.telephoneNumber);
+
+        # test adding multiple values to an attribute
+        ldap.modify(testEntryDn, {
+            "mod": LDAP_MOD_ADD,
+            "attr": "telephoneNumber",
+            "value": "098-765-4321",
+        });
+
+        result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        # should now have multiple phone numbers
+        auto phones = result{testEntryDn}.telephoneNumber;
+        if (phones.typeCode() == NT_LIST) {
+            assertTrue(phones.size() >= 2);
+        }
+
+        # test replace with list of values
+        ldap.modify(testEntryDn, {
+            "mod": LDAP_MOD_REPLACE,
+            "attr": "telephoneNumber",
+            "value": ("111-111-1111", "222-222-2222"),
+        });
+
+        result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        phones = result{testEntryDn}.telephoneNumber;
+        if (phones.typeCode() == NT_LIST) {
+            assertEq(2, phones.size());
+        }
+
+        # cleanup - delete telephoneNumber
+        ldap.modify(testEntryDn, {
+            "mod": LDAP_MOD_DELETE,
+            "attr": "telephoneNumber",
+        });
+    }
+
+    #! Test LdapClient::modify() negative cases
+    testModifyNegative() {
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        # test modify on non-existent entry
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.modify("uid=nonexistent,ou=people,dc=example,dc=com", {
+                "mod": LDAP_MOD_REPLACE,
+                "attr": "cn",
+                "value": "test",
+            });
+        });
+
+        # test modify with invalid mod type
+        assertThrows("LDAP-MODIFY-ERROR", sub() {
+            ldap.modify(testEntryDn, {
+                "mod": "invalid_mod_type",
+                "attr": "cn",
+                "value": "test",
+            });
+        });
+
+        # test modify with missing attr key
+        assertThrows("LDAP-MODIFY-ERROR", sub() {
+            ldap.modify(testEntryDn, {
+                "mod": LDAP_MOD_REPLACE,
+                "value": "test",
+            });
+        });
+
+        # test modify with missing mod key
+        assertThrows("LDAP-MODIFY-ERROR", sub() {
+            ldap.modify(testEntryDn, {
+                "attr": "cn",
+                "value": "test",
+            });
+        });
+
+        # test add without value (should fail for add operation)
+        assertThrows("LDAP-MODIFY-ERROR", sub() {
+            ldap.modify(testEntryDn, {
+                "mod": LDAP_MOD_ADD,
+                "attr": "description",
+            });
+        });
+
+        # test deleting non-existent attribute
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.modify(testEntryDn, {
+                "mod": LDAP_MOD_DELETE,
+                "attr": "nonExistentAttribute",
+            });
+        });
+    }
+
+    #! Test LdapClient::compare() method
+    testCompare() {
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        # test comparison that should return true
+        bool result = ldap.compare(testEntryDn, "uid", "qoretest");
+        assertTrue(result);
+
+        # test comparison that should return false
+        result = ldap.compare(testEntryDn, "uid", "wrongvalue");
+        assertFalse(result);
+
+        # test comparison with cn attribute
+        result = ldap.compare(testEntryDn, "cn", "Qore Test User");
+        assertTrue(result);
+    }
+
+    #! Test LdapClient::compare() negative cases
+    testCompareNegative() {
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        # test compare on non-existent entry
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.compare("uid=nonexistent,ou=people,dc=example,dc=com", "uid", "test");
+        });
+
+        # test compare with non-existent attribute
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.compare(testEntryDn, "nonExistentAttribute", "value");
+        });
+    }
+
+    #! Test LdapClient::rename() method
+    testRename() {
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        string newRdn = "uid=qoretest-renamed";
+        string renamedDn = newRdn + "," + peopledn;
+
+        # rename the entry
+        ldap.rename(testEntryDn, newRdn, peopledn);
+
+        # verify old entry no longer exists (search returns empty)
+        hash<auto> result = ldap.search({
+            "base": peopledn,
+            "filter": "(uid=qoretest)",
+            "scope": LDAP_SCOPE_SUBTREE,
+        });
+        assertEq(0, result.size());
+
+        # verify new entry exists
+        result = ldap.search({
+            "base": renamedDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(result.hasKey(renamedDn));
+
+        # rename it back for cleanup
+        ldap.rename(renamedDn, "uid=qoretest", peopledn);
+    }
+
+    #! Test LdapClient::rename() negative cases
+    testRenameNegative() {
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        # test rename non-existent entry
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.rename("uid=nonexistent,ou=people,dc=example,dc=com", "uid=newname", peopledn);
+        });
+
+        # test rename to non-existent parent
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.rename(testEntryDn, "uid=qoretest", "ou=nonexistent,dc=example,dc=com");
+        });
+    }
+
+    #! Test LdapClient::del() method
+    testDel() {
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        # delete the test entry
+        ldap.del(testEntryDn);
+
+        # verify the entry was deleted
+        hash<auto> result = ldap.search({
+            "base": peopledn,
+            "filter": "(uid=qoretest)",
+            "scope": LDAP_SCOPE_SUBTREE,
+        });
+        assertEq(0, result.size());
+    }
+
+    #! Test LdapClient::del() negative cases
+    testDelNegative() {
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+
+        # test deleting non-existent entry
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.del(testEntryDn);
+        });
+
+        # test deleting entry with children (if applicable)
+        # Note: ou=people cannot be deleted if it has children
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.del(peopledn);
+        });
+    }
+
+    #! Test LdapClient::copy() method
+    testCopy() {
+        LdapClient ldap = getClient();
+        LdapClient ldap2 = ldap.copy();
+
+        assertEq(ldap.getUri(), ldap2.getUri());
+
+        # verify the copy works independently
+        hash<auto> result = ldap2.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertEq(Type::Hash, result.type());
+
+        # verify original still works after copy is used
+        result = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertEq(Type::Hash, result.type());
+    }
+
+    #! Test LDAP constants
+    testConstants() {
+        # test scope constants exist and are integers
+        assertEq(Type::Int, LDAP_SCOPE_BASE.type());
+        assertEq(Type::Int, LDAP_SCOPE_ONELEVEL.type());
+        assertEq(Type::Int, LDAP_SCOPE_SUBTREE.type());
+        assertEq(Type::Int, LDAP_SCOPE_CHILDREN.type());
+
+        # test scope constants have distinct values
+        assertTrue(LDAP_SCOPE_BASE != LDAP_SCOPE_ONELEVEL);
+        assertTrue(LDAP_SCOPE_ONELEVEL != LDAP_SCOPE_SUBTREE);
+        assertTrue(LDAP_SCOPE_SUBTREE != LDAP_SCOPE_CHILDREN);
+
+        # test modify constants
+        assertEq("add", LDAP_MOD_ADD);
+        assertEq("delete", LDAP_MOD_DELETE);
+        assertEq("replace", LDAP_MOD_REPLACE);
+
+        # test default timeout
+        assertEq(60s, DefaultTimeout);
+    }
+
+    #! Test timeout functionality
+    testTimeout() {
+        # test with custom timeout in constructor
+        {
+            LdapClient ldap(uri, {
+                "binddn": binddn,
+                "password": password,
+                "timeout": 5s,
+            });
+
+            hash<auto> result = ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test with timeout parameter in search
+        {
+            LdapClient ldap = getClient();
+            hash<auto> result = ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            }, 10s);
+            assertEq(Type::Hash, result.type());
+        }
+
+        # test with very short timeout (should still work for local server)
+        {
+            LdapClient ldap = getClient();
+            hash<auto> result = ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            }, 100ms);
+            assertEq(Type::Hash, result.type());
+        }
+    }
+
+    #! Test UTF-8 encoding handling
+    testUtf8Encoding() {
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+
+        # create entry with UTF-8 characters
+        string utf8Dn = "uid=qoretest,ou=people,dc=example,dc=com";
+        hash<auto> attrs = {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest",
+            "cn": "Test User",
+            "sn": "Test",
+            "givenName": "Qore",
+            "displayName": "Test User",
+            "uidNumber": "99999",
+            "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+        };
+
+        ldap.add(utf8Dn, attrs);
+
+        # verify the entry
+        hash<auto> result = ldap.search({
+            "base": utf8Dn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(result.hasKey(utf8Dn));
+
+        # cleanup
+        ldap.del(utf8Dn);
+    }
+
+    #! Test special characters in attribute values
+    testSpecialCharacters() {
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+
+        # create entry
+        hash<auto> attrs = {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest",
+            "cn": "Test User",
+            "sn": "Test",
+            "givenName": "Qore",
+            "displayName": "Test User",
+            "uidNumber": "99999",
+            "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+        };
+
+        ldap.add(testEntryDn, attrs);
+
+        # modify with special characters in value
+        ldap.modify(testEntryDn, {
+            "mod": LDAP_MOD_ADD,
+            "attr": "description",
+            "value": "Test with special chars: <>&\"'",
+        });
+
+        hash<auto> result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertEq("Test with special chars: <>&\"'", result{testEntryDn}.description);
+
+        # cleanup
+        ldap.del(testEntryDn);
+    }
+
+    #! Test multi-valued attributes
+    testMultiValuedAttributes() {
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+
+        # create entry with multi-valued objectClass
+        hash<auto> attrs = {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest",
+            "cn": "Test User",
+            "sn": "Test",
+            "givenName": "Qore",
+            "displayName": "Test User",
+            "mail": ("test1@example.com", "test2@example.com"),
+            "uidNumber": "99999",
+            "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+        };
+
+        ldap.add(testEntryDn, attrs);
+
+        # verify multi-valued attribute
+        hash<auto> result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(result.hasKey(testEntryDn));
+        auto mails = result{testEntryDn}.mail;
+        if (mails.typeCode() == NT_LIST) {
+            assertEq(2, mails.size());
+        }
+
+        # cleanup
+        ldap.del(testEntryDn);
+    }
+}
