@@ -51,14 +51,16 @@ apk add --no-cache openldap openldap-clients openldap-back-mdb
 # Configure slapd
 echo "Configuring OpenLDAP..."
 
-# Create directories
+# Create clean directories
+rm -rf /var/lib/openldap/openldap-data/*
+rm -rf /etc/openldap/slapd.d/*
 mkdir -p /var/lib/openldap/run
 mkdir -p /etc/openldap/slapd.d
 mkdir -p /var/lib/openldap/openldap-data
 chown -R ldap:ldap /var/lib/openldap /etc/openldap
 
-# Initialize with our test domain
-cat > /tmp/slapd.conf << 'SLAPD_CONF'
+# Start slapd directly with slapd.conf (Alpine doesn't require cn=config)
+cat > /etc/openldap/slapd.conf << 'SLAPD_CONF'
 include         /etc/openldap/schema/core.schema
 include         /etc/openldap/schema/cosine.schema
 include         /etc/openldap/schema/nis.schema
@@ -80,12 +82,10 @@ directory       /var/lib/openldap/openldap-data
 index           objectClass eq
 SLAPD_CONF
 
-rm -rf /etc/openldap/slapd.d/*
-slaptest -f /tmp/slapd.conf -F /etc/openldap/slapd.d
-chown -R ldap:ldap /etc/openldap/slapd.d /var/lib/openldap
+chown -R ldap:ldap /etc/openldap /var/lib/openldap
 
-# Start slapd
-slapd -h "ldap://localhost:389" -u ldap -g ldap
+# Start slapd directly with slapd.conf
+slapd -f /etc/openldap/slapd.conf -h "ldap://localhost:389" -u ldap -g ldap
 sleep 2
 
 # Add base entries

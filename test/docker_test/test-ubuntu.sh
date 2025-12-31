@@ -45,53 +45,29 @@ echo && echo "-- installing OpenLDAP server for testing --"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y slapd ldap-utils
 
-# Configure slapd
+# Configure slapd - use the default debconf-installed config and just add our test data
 echo "Configuring OpenLDAP..."
+
+# Reconfigure slapd non-interactively with our test domain
 service slapd stop || true
-
-# Create test directory structure
-rm -rf /var/lib/ldap/*
-rm -rf /etc/ldap/slapd.d/*
-
-# Initialize with our test domain
-cat > /tmp/slapd.conf << 'SLAPD_CONF'
-include         /etc/ldap/schema/core.schema
-include         /etc/ldap/schema/cosine.schema
-include         /etc/ldap/schema/nis.schema
-include         /etc/ldap/schema/inetorgperson.schema
-
-pidfile         /var/run/slapd/slapd.pid
-argsfile        /var/run/slapd/slapd.args
-
-modulepath      /usr/lib/ldap
-moduleload      back_mdb
-
-database        mdb
-maxsize         1073741824
-suffix          "dc=example,dc=com"
-rootdn          "cn=admin,dc=example,dc=com"
-rootpw          admin
-directory       /var/lib/ldap
-
-index           objectClass eq
-SLAPD_CONF
-
-slaptest -f /tmp/slapd.conf -F /etc/ldap/slapd.d
-chown -R openldap:openldap /etc/ldap/slapd.d /var/lib/ldap
+echo "slapd slapd/internal/adminpw password admin" | debconf-set-selections
+echo "slapd slapd/internal/generated_adminpw password admin" | debconf-set-selections
+echo "slapd slapd/password1 password admin" | debconf-set-selections
+echo "slapd slapd/password2 password admin" | debconf-set-selections
+echo "slapd slapd/domain string example.com" | debconf-set-selections
+echo "slapd shared/organization string Example" | debconf-set-selections
+echo "slapd slapd/purge_database boolean true" | debconf-set-selections
+echo "slapd slapd/move_old_database boolean true" | debconf-set-selections
+echo "slapd slapd/no_configuration boolean false" | debconf-set-selections
+rm -rf /var/lib/ldap/* /etc/ldap/slapd.d/*
+dpkg-reconfigure -f noninteractive slapd
 
 # Start slapd
 service slapd start
 sleep 2
 
-# Add base entries
+# Add test OUs and entries (base dc=example,dc=com is created by dpkg-reconfigure)
 ldapadd -x -H ldap://localhost -D "cn=admin,dc=example,dc=com" -w admin << 'BASE_LDIF'
-dn: dc=example,dc=com
-objectClass: top
-objectClass: dcObject
-objectClass: organization
-o: Example Organization
-dc: example
-
 dn: ou=people,dc=example,dc=com
 objectClass: organizationalUnit
 ou: people
