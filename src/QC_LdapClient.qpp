@@ -413,6 +413,6 @@ bool LdapClient::isSecure() [flags=RET_VALUE_ONLY] {
     - \c Extensions: a list of extensions supported (strings)
     - \c ApiFeature: a hash with a single key; the API feature name, where the value is the feature version
 */
-static LdapClient::getInfo() [flags=CONSTANT] {
+static hash<auto> LdapClient::getInfo() [flags=CONSTANT] {
    return QoreLdapClient::getInfo();
 }
