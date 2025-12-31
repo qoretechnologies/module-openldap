@@ -286,7 +286,7 @@ public class LdapEntry {
 public class LdapSearchIterator inherits AbstractIterator {
     private {
         hash<auto> results;
-        list<string> keys;
+        list<string> dnList;
         int pos = -1;
     }
 
@@ -296,27 +296,27 @@ public class LdapSearchIterator inherits AbstractIterator {
     */
     constructor(hash<auto> results) {
         self.results = results;
-        self.keys = keys results;
+        dnList = keys results;
     }
 
     #! Advances to the next entry
     bool next() {
         pos++;
-        return pos < keys.size();
+        return pos < dnList.size();
     }
 
     #! Gets the current entry as an LdapEntry object
     LdapEntry getValue() {
-        if (pos < 0 || pos >= keys.size()) {
+        if (pos < 0 || pos >= dnList.size()) {
             throw "ITERATOR-ERROR", "iterator not at a valid position";
         }
-        string dn = keys[pos];
+        string dn = dnList[pos];
         return new LdapEntry(dn, results{dn});
     }
 
     #! Checks if the iterator is valid
     bool valid() {
-        return pos >= 0 && pos < keys.size();
+        return pos >= 0 && pos < dnList.size();
     }
 
     #! Resets the iterator
@@ -326,13 +326,13 @@ public class LdapSearchIterator inherits AbstractIterator {
 
     #! Returns the number of results
     int size() {
-        return keys.size();
+        return dnList.size();
     }
 
     #! Gets all entries as a list
     list<LdapEntry> getAll() {
         list<LdapEntry> entries = ();
-        foreach string dn in (keys) {
+        foreach string dn in (dnList) {
             entries += new LdapEntry(dn, results{dn});
         }
         return entries;
