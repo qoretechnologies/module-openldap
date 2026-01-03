@@ -594,6 +594,10 @@ protected:
         if (my_timeout_ms && my_timeout_ms != timeout_ms)
             timeout = my_timeout_ms;
 
+        // Check for interrupt before connection
+        if (qore_check_io_interrupt(xsink))
+            return -1;
+
         // force a connection to the server with an empty search request and ignore the result
         int msgid;
         if (checkLdapError(m, "ldap_search_ext", ldap_search_ext(ldp, 0, LDAP_SCOPE_BASE, 0, 0, 0, 0, 0, 0, 0, &msgid), xsink))
@@ -633,6 +637,10 @@ protected:
 
         QoreStringBervalHelper passwd(password, xsink);
         if (*xsink)
+            return -1;
+
+        // Check for interrupt before bind
+        if (qore_check_io_interrupt(xsink))
             return -1;
 
         int msgid;
@@ -762,6 +770,10 @@ public:
         if (checkValidIntern("search", xsink))
             return 0;
 
+        // Check for interrupt before search
+        if (qore_check_io_interrupt(xsink))
+            return 0;
+
         int msgid;
         if (checkLdapError("search", "ldap_search_ext", ldap_search_ext(ldp, bstr->empty() ? 0 : bstr->getBuffer(), scope, fstr->empty() ? 0 : fstr->getBuffer(), *attrs, (int)attrsonly, 0, 0, 0, 0, &msgid), xsink))
             return 0;
@@ -853,6 +865,10 @@ public:
         if (checkValidIntern("add", xsink))
             return -1;
 
+        // Check for interrupt before add
+        if (qore_check_io_interrupt(xsink))
+            return -1;
+
         int msgid;
         if (checkLdapError("add", "ldap_add_ext", ldap_add_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), (LDAPMod**)*mods, 0, 0, &msgid), xsink))
             return -1;
@@ -882,6 +898,10 @@ public:
         if (checkValidIntern("modify", xsink))
             return -1;
 
+        // Check for interrupt before modify
+        if (qore_check_io_interrupt(xsink))
+            return -1;
+
         int msgid;
         if (checkLdapError("modify", "ldap_modify_ext", ldap_modify_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), (LDAPMod**)*mods, 0, 0, &msgid), xsink))
             return -1;
@@ -905,6 +925,10 @@ public:
 
         AutoLocker al(m);
         if (checkValidIntern("del", xsink))
+            return -1;
+
+        // Check for interrupt before delete
+        if (qore_check_io_interrupt(xsink))
             return -1;
 
         int msgid;
@@ -938,6 +962,10 @@ public:
 
         AutoLocker al(m);
         if (checkValidIntern("compare", xsink))
+            return false;
+
+        // Check for interrupt before compare
+        if (qore_check_io_interrupt(xsink))
             return false;
 
         int msgid;
@@ -984,6 +1012,10 @@ public:
         if (checkValidIntern("rename", xsink))
             return -1;
 
+        // Check for interrupt before rename
+        if (qore_check_io_interrupt(xsink))
+            return -1;
+
         //printd(5, "LdapClient::rename() dn: '%s' newrdn: '%s' newparent: '%s' deleteoldrdn: %d\n", dnstr->getBuffer(), newrdnstr->getBuffer(), newparentstr->getBuffer(), (int)deleteoldrdn);
 
         int msgid;
@@ -1017,6 +1049,10 @@ public:
 
         AutoLocker al(m);
         if (checkValidIntern("passwd", xsink))
+            return -1;
+
+        // Check for interrupt before passwd
+        if (qore_check_io_interrupt(xsink))
             return -1;
 
         //printd(5, "LdapClient::passwd() dn: '%s' old: '%s' new: '%s'\n", dnstr->getBuffer(), opstr->getBuffer(), npstr->getBuffer());

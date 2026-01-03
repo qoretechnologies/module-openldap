@@ -27,6 +27,7 @@
 #include <config.h>
 
 #include <qore/Qore.h>
+#include <qore/QoreSandboxManager.h>
 
 #include <ldap.h>
 
