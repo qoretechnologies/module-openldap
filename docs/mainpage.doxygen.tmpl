@@ -238,6 +238,10 @@ ldap.passwd("uid=test,ou=people,dc=example,dc=com", "oldpassword", "newpassword"
     @section openldap_release_notes Release Notes
 
     @subsection openldap_rel13 openldap Module 1.3
+    - added support for interruptible I/O for graceful termination of sandboxed programs; interrupt
+      checks are performed before all LDAP operations (connect, bind, search, add, modify, delete,
+      compare, rename, passwd)
+      (<a href="https://github.com/qoretechnologies/qore/issues/5116">issue 5116</a>)
     - <b>critical fix</b>: fixed null-termination bug in QoreLDAPMod that caused segfaults
       when adding or modifying entries with multi-valued attributes (lists)
     - fixed unreachable code in del() method
