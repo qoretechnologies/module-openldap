@@ -1,10 +1,7 @@
 #!/usr/bin/env qore
 # -*- mode: qore; indent-tabs-mode: nil -*-
 
-%enable-all-warnings
-%new-style
-%strict-args
-%require-types
+%modern
 
 # uses the openldap module
 %requires openldap
@@ -19,11 +16,9 @@ const Defaults = (
     );
 
 const opts = (
-    # change password
-    "oldpwd": "a,old=s",
-    "promptold": "A,prompt-old",
-    "newpwd": "s,new=s",
-    "promptnew": "S,prompt-new",
+    # modify
+    "add": "a,add",
+    "del": "x,delete",
 
     # common
     "uri": "H,uri=s",
@@ -54,11 +49,49 @@ sub main() {
     }
 
     *string dn = shift ARGV;
-    if (!dn)
-        error("missing dn of user to change password for");
+    if (!dn) {
+        stderr.printf("%s: missing dn to modify\n", get_script_name());
+        exit(1);
+    }
 
     if (!opts.uri)
 	opts.uri = Defaults.uri;
+
+    string mod;
+    if (opts.add) {
+        if (opts.del) {
+            stderr.printf("%s: can't use both -a (add) and -x (delete) options together\n", get_script_name());
+            exit(1);
+        }
+        mod = LDAP_MOD_ADD;
+    }
+    else if (opts.del)
+        mod = LDAP_MOD_DELETE;
+    else
+        mod = LDAP_MOD_REPLACE;
+
+    # get modification argument list
+    list mods = ();
+    while (ARGV) {
+        *string attr = shift ARGV;
+        if (!attr) {
+            stderr.printf("%s: missing attribute to modify in argument %d (starting with 0)\n", get_script_name(), mods.size());
+            exit(1);
+        }
+        *string value = shift ARGV;
+        if (!value) {
+            stderr.printf("%s: missing attribute value in argument %d (starting with 0)\n", get_script_name(), mods.size());
+            exit(1);
+        }
+        if (opts.del && value == "-")
+            delete value;
+
+        mods += (
+            "mod": mod,
+            "attr": attr,
+            "value": value,
+            );
+    }
 
     if (opts.promptbind) {
         stdout.printf("Enter LDAP Bind Password: ");
@@ -66,52 +99,21 @@ sub main() {
         opts.password = t.getLine();
     }
 
-    if (opts.promptold) {
-        stdout.printf("Enter Old Password: ");
-        TerminalInputHelper t();
-        opts.oldpwd = t.getLine();
-    }
-
-    if (opts.promptnew) {
-        stdout.printf("Enter New Password: ");
-        TerminalInputHelper t();
-        string op1 = t.getLine();
-        stdout.printf("Re-enter New Password: ");
-        string op2 = t.getLine();
-        if (op1 != op2)
-            error("new passwords do not match");
-
-        opts.newpwd = op1;
-    }
-
-    if (!opts.oldpwd)
-        error("missing old password (use -a or -A)");
-
-    if (!opts.newpwd)
-        error("missing new password (use -s or -S)");
-
     hash lopt = opts{LdapOptions};
 
     if (opts.verbose)
-        printf("uri: %y, lopt: %y, dn: %y\n", opts.uri, lopt, dn);
+        printf("uri: %y, lopt: %y, dn: %y, mods: %y\n", opts.uri, lopt, dn, mods);
 
     LdapClient ldap(opts.uri, lopt);
-    ldap.passwd(dn, opts.oldpwd, opts.newpwd);
-}
-
-sub error(string fmt) {
-    fmt = sprintf("%s: %s\n", get_script_name(), fmt);
-    stderr.vprintf(fmt, argv);
-    exit(1);
+    ldap.modify(dn, mods);
 }
 
 sub usage() {
-    printf("usage: %s [options] <dn>
-Password Change Options:
-  -a,--old=ARG       old password
-  -A,--prompt-old    prompt for old password
-  -s,--new=ARG       new password
-  -S,--prompt-new    prompt for new password
+    printf("usage: %s [options] <dn> <attr> <value> [<attr> <value> ...]
+Modify Options:
+  -a,--add           add values (default is to replace)
+  -x,--delete        delete values (default is to replace); to delete the
+                     entire attribute (all values); use '-' as the value
 
 Common LDAP Options:
   -D,--binddn=ARG    bind DN

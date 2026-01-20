@@ -1,10 +1,7 @@
 #!/usr/bin/env qore
 # -*- mode: qore; indent-tabs-mode: nil -*-
 
-%enable-all-warnings
-%new-style
-%strict-args
-%require-types
+%modern
 
 # uses the openldap module
 %requires openldap
@@ -16,21 +13,9 @@ main();
 
 const Defaults = (
     "uri": "ldap://localhost:389",
-    "filter": "objectClass=*",
-    );
-
-const ScopeMap = (
-    "base": LDAP_SCOPE_BASE,
-    "one": LDAP_SCOPE_ONELEVEL,
-    "sub": LDAP_SCOPE_SUBTREE,
-    "children": LDAP_SCOPE_CHILDREN,
     );
 
 const opts = (
-    # search
-    "base": "b,basedn=s",
-    "scope": "s,scope=s",
-
     # common
     "uri": "H,uri=s",
     "binddn": "D,binddn=s",
@@ -59,21 +44,12 @@ sub main() {
 	exit(0);
     }
 
-    if (opts.scope) {
-	*int scope = ScopeMap.(opts.scope);
-	if (!exists scope) {
-	    stderr.printf("%s: invalid scope %y (expecting one of %y)\n", get_script_name(), opts.scope, ScopeMap.keys());
-	    exit(1);
-	}
-	opts.scope = scope;
-    }
+    *string dn = shift ARGV;
+    if (!dn)
+        error("missing dn to delete");
 
-    if (ARGV[0]) {
-	opts.filter = shift ARGV;
-	opts.attributes = ARGV;
-    }
-    else
-	opts.filter = Defaults.filter;
+    if (!opts.uri)
+	opts.uri = Defaults.uri;
 
     if (opts.promptbind) {
         stdout.printf("Enter LDAP Bind Password: ");
@@ -82,37 +58,36 @@ sub main() {
     }
 
     hash lopt = opts{LdapOptions};
-    if (!opts.uri)
-	opts.uri = Defaults.uri;
 
     if (opts.verbose)
-        printf("uri: %y, lopt: %y\n", opts.uri, lopt);
+        printf("uri: %y, lopt: %y, dn: %y\n", opts.uri, lopt, dn);
 
     LdapClient ldap(opts.uri, lopt);
+    ldap.del(dn);
+}
 
-    printf("%N\n", ldap.search(opts.("base", "filter", "attributes", "scope")));
+sub error(string fmt) {
+    fmt = sprintf("%s: %s\n", get_script_name(), fmt);
+    stderr.vprintf(fmt, argv);
+    exit(1);
 }
 
 sub usage() {
-    printf("usage: %s [options] filter
-Search Options:
-  -b,--basedn=ARG    base dn for search
-  -s,--scope=ARG     the search scope, one of 'base', 'one', 'sub', or 'children'
-
+    printf("usage: %s [options] <dn> <attr>=<value> [<attr>=<value> ...]
 Common LDAP Options:
-  -D,--binddn=ARG    bind DN
-  -H,--uri=ARG       LDAP Uniform Resource Identifier(s)
-  -l,--timeout=ARG   set timeout in milliseconds (default: %y)
-  -P,--protocol=ARG  set protocol version (default: 3)
-  -r,--no-referrals  do not chase referrals
-  -v,--verbose       verbose mode; shows more information
-  -w,--passwd=ARG    bind password (for simple authentication)
-  -W,--prompt-bind   prompt for bind password
-  -Z,--starttls      ensure a secure connection
+  -D,--binddn=ARG     bind DN
+  -H,--uri=ARG        LDAP Uniform Resource Identifier(s)
+  -l,--timeout=ARG    set timeout in milliseconds (default: %y)
+  -P,--protocol=ARG   set protocol version (default: 3)
+  -r,--no-referrals   do not chase referrals
+  -v,--verbose        verbose mode; shows more information
+  -w,--passwd=ARG     bind password (for simple authentication)
+  -W,--prompt-bind    prompt for bind password
+  -Z,--starttls       ensure a secure connection
 
 Other Options:
-  -i,--info          show ldap library info and exit
-  -h,--help          this help text
+  -i,--info           show ldap library info and exit
+  -h,--help           this help text
 ", get_script_name(), OpenLdap::DefaultTimeout);
     exit(0);
 }

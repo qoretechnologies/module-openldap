@@ -121,7 +121,7 @@ BASE_LDIF
 
 # run the tests
 echo && echo "-- running tests --"
-export QORE_MODULE_DIR=${MODULE_SRC_DIR}/qlib/OpenLdap:${MODULE_SRC_DIR}/qlib:${QORE_MODULE_DIR}
+export QORE_MODULE_DIR=${MODULE_SRC_DIR}/qlib:${QORE_MODULE_DIR}
 export LDAP_URI="ldap://localhost:389"
 export LDAP_BINDDN="cn=admin,dc=example,dc=com"
 export LDAP_PASSWORD="admin"

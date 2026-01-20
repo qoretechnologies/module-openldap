@@ -1,0 +1,44 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+
+%new-style
+%enable-all-warnings
+%require-types
+%strict-args
+
+%requires ../../../qlib/QUnit.qm
+
+%exec-class Main
+
+class Main inherits QUnit::Test {
+
+    constructor() : Test("Main", "1.0", \ARGV) {
+
+        addTestCase("test_OpenLdap_LdapClient", \test_OpenLdap_LdapClient());
+
+        # Return for compatibility with test harness that checks return value.
+        set_return_value(main());
+    }
+
+    # Qore class OpenLdap::LdapClient
+    private test_OpenLdap_LdapClient() {
+        # nothing LdapClient::add(string dn, hash attrs, *timeout timeout_ms){}
+        # nothing LdapClient::bind(hash bind, *timeout timeout_ms){}
+        # bool LdapClient::compare(string dn, string attr, softlist vals, *timeout timeout_ms){}
+        # nothing LdapClient::constructor(string uri, *hash options){}
+        # nothing LdapClient::copy(){}
+        # nothing LdapClient::del(string dn, *timeout timeout_ms){}
+        # nothing LdapClient::destructor(){}
+        # string LdapClient::getUri(){}
+        # bool LdapClient::isSecure(){}
+        # nothing LdapClient::modify(string dn, softlist mods, *timeout timeout_ms){}
+        # nothing LdapClient::passwd(string dn, string oldpwd, string newpwd, *timeout timeout_ms){}
+        # nothing LdapClient::rename(string dn, string newrdn, string newparent, softbool deleteoldrdn = True, *timeout timeout_ms){}
+        # hash LdapClient::search(hash h, *timeout timeout_ms){}
+        # static nothing LdapClient::getInfo(){}
+        assertEq(True, False, "assertion placeholder; the real test needs to be implemented");
+    }
+
+
+
+} # class Main 

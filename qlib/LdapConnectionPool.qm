@@ -1,7 +1,7 @@
 # -*- mode: qore; indent-tabs-mode: nil -*-
 #! @file LdapConnectionPool.qm Qore OpenLDAP module connection pool implementation
 
-/*  LdapConnectionPool.qm Copyright 2024 Qore Technologies, s.r.o.
+/*  LdapConnectionPool.qm Copyright 2026 Qore Technologies, s.r.o.
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the "Software"),
@@ -22,10 +22,7 @@
     DEALINGS IN THE SOFTWARE.
 */
 
-%require-types
-%enable-all-warnings
-%new-style
-%strict-args
+%modern
 
 module LdapConnectionPool {
     version = "1.0";

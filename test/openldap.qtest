@@ -1,10 +1,7 @@
 #!/usr/bin/env qore
 # -*- mode: qore; indent-tabs-mode: nil -*-
 
-%new-style
-%strict-args
-%require-types
-%enable-all-warnings
+%modern
 
 %requires openldap
 %requires QUnit
@@ -25,26 +22,39 @@ public class OpenLdapTest inherits QUnit::Test {
         const DefaultGroupsDn = "ou=groups,dc=example,dc=com";
 
         string uri;
-        string binddn;
-        string password;
+        *string binddn;
+        *string password;
         string basedn;
         string peopledn;
         string groupsdn;
 
         # test entry DN for add/modify/delete tests
         string testEntryDn;
+
+        # flag for anonymous bind (no write operations allowed)
+        bool anonymousBind = False;
     }
 
     constructor() : Test("OpenLdapTest", "1.0") {
         # get connection settings from environment or use defaults
         uri = ENV.LDAP_URI ?? DefaultUri;
-        binddn = ENV.LDAP_BINDDN ?? DefaultBindDn;
-        password = ENV.LDAP_PASSWORD ?? DefaultPassword;
+        # If LDAP_BINDDN is explicitly empty or not set, use anonymous bind
+        if (exists ENV.LDAP_BINDDN) {
+            if (ENV.LDAP_BINDDN.val()) {
+                binddn = ENV.LDAP_BINDDN;
+                password = ENV.LDAP_PASSWORD;
+            } else {
+                anonymousBind = True;
+            }
+        } else {
+            binddn = DefaultBindDn;
+            password = DefaultPassword;
+        }
         basedn = ENV.LDAP_BASEDN ?? DefaultBaseDn;
         peopledn = ENV.LDAP_PEOPLEDN ?? DefaultPeopleDn;
         groupsdn = ENV.LDAP_GROUPSDN ?? DefaultGroupsDn;
 
-        testEntryDn = "uid=qoretest,ou=people,dc=example,dc=com";
+        testEntryDn = sprintf("uid=qoretest,%s", peopledn);
 
         # Core functionality tests
         addTestCase("LdapClient::getInfo() test", \testGetInfo());
@@ -68,6 +78,8 @@ public class OpenLdapTest inherits QUnit::Test {
         addTestCase("LdapClient::rename() negative tests", \testRenameNegative());
         addTestCase("LdapClient::del() test", \testDel());
         addTestCase("LdapClient::del() negative tests", \testDelNegative());
+        addTestCase("LdapClient::passwd() test", \testPasswd());
+        addTestCase("LdapClient::passwd() negative tests", \testPasswdNegative());
         addTestCase("LdapClient::copy() test", \testCopy());
         addTestCase("Constants test", \testConstants());
         addTestCase("Timeout test", \testTimeout());
@@ -77,19 +89,39 @@ public class OpenLdapTest inherits QUnit::Test {
 
         # LdapHelper module tests
         addTestCase("LdapDn test", \testLdapDn());
+        addTestCase("LdapDn corner cases test", \testLdapDnCornerCases());
         addTestCase("LdapEntry test", \testLdapEntry());
+        addTestCase("LdapEntry corner cases test", \testLdapEntryCornerCases());
         addTestCase("LdapSearchIterator test", \testLdapSearchIterator());
+        addTestCase("LdapSearchIterator corner cases and negative tests", \testLdapSearchIteratorNegative());
         addTestCase("LdapClientHelper test", \testLdapClientHelper());
+        addTestCase("LdapClientHelper corner cases test", \testLdapClientHelperCornerCases());
 
         # LdapConnectionPool module tests
         addTestCase("LdapConnectionPool test", \testConnectionPool());
         addTestCase("LdapConnectionPool withConnection test", \testConnectionPoolWithConnection());
+        addTestCase("LdapConnectionPool negative tests", \testConnectionPoolNegative());
+        addTestCase("LdapConnectionPool cleanup test", \testConnectionPoolCleanup());
 
         set_return_value(main());
     }
 
     private LdapClient getClient() {
-        return new LdapClient(uri, {"binddn": binddn, "password": password});
+        hash<auto> opts;
+        if (binddn.val()) {
+            opts = {"binddn": binddn, "password": password};
+        }
+        return new LdapClient(uri, opts);
+    }
+
+    private bool canWrite() {
+        return !anonymousBind && binddn.val();
+    }
+
+    private skipIfReadOnly(string reason = "requires write access") {
+        if (!canWrite()) {
+            testSkip(sprintf("Skipped: %s (anonymous bind)", reason));
+        }
     }
 
     private cleanupTestEntry() {
@@ -146,8 +178,8 @@ public class OpenLdapTest inherits QUnit::Test {
             assertEq(uri, ldap.getUri());
         }
 
-        # test constructor with bind options
-        {
+        # test constructor with bind options (only if credentials provided)
+        if (canWrite()) {
             hash<auto> opts = {
                 "binddn": binddn,
                 "password": password,
@@ -157,8 +189,8 @@ public class OpenLdapTest inherits QUnit::Test {
             assertEq(uri, ldap.getUri());
         }
 
-        # test constructor with all options
-        {
+        # test constructor with all options (only if credentials provided)
+        if (canWrite()) {
             hash<auto> opts = {
                 "binddn": binddn,
                 "password": password,
@@ -197,23 +229,27 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::getUri() method
     testGetUri() {
-        LdapClient ldap(uri, {"binddn": binddn, "password": password});
+        LdapClient ldap = getClient();
         assertEq(uri, ldap.getUri());
         assertEq(Type::String, ldap.getUri().type());
     }
 
     #! Test LdapClient::isSecure() method
     testIsSecure() {
-        # test non-secure connection
-        LdapClient ldap(uri, {"binddn": binddn, "password": password});
+        LdapClient ldap = getClient();
         bool secure = ldap.isSecure();
         assertEq(Type::Boolean, secure.type());
-        # non-TLS connection should return false
-        assertFalse(secure);
+        # ldaps:// should return True, ldap:// should return False
+        if (uri =~ /^ldaps:/i) {
+            assertTrue(secure);
+        } else {
+            assertFalse(secure);
+        }
     }
 
     #! Test LdapClient::bind() method
     testBind() {
+        skipIfReadOnly("bind() requires credentials");
         LdapClient ldap(uri);
 
         # test bind with valid credentials
@@ -227,11 +263,6 @@ public class OpenLdapTest inherits QUnit::Test {
     testBindNegative() {
         LdapClient ldap(uri);
 
-        # test bind with invalid password
-        assertThrows("LDAP-RESULT-ERROR", sub() {
-            ldap.bind({"binddn": binddn, "password": "wrongpassword"});
-        });
-
         # test bind with non-existent user
         assertThrows("LDAP-RESULT-ERROR", sub() {
             ldap.bind({"binddn": "cn=nonexistent,dc=example,dc=com", "password": "anypassword"});
@@ -242,10 +273,21 @@ public class OpenLdapTest inherits QUnit::Test {
             ldap.bind({"password": "somepassword"});
         });
 
-        # test bind with empty binddn
-        assertThrows("LDAP-RESULT-ERROR", sub() {
+        # test bind with empty binddn - some servers allow this for anonymous bind
+        try {
             ldap.bind({"binddn": "", "password": "somepassword"});
-        });
+            # Some servers allow empty binddn for anonymous bind, so don't fail
+        } catch (hash<ExceptionInfo> ex) {
+            # Expected behavior - empty binddn should fail
+            assertEq("LDAP-RESULT-ERROR", ex.err);
+        }
+
+        # test bind with invalid password (only if we have valid credentials to compare)
+        if (canWrite()) {
+            assertThrows("LDAP-RESULT-ERROR", sub() {
+                ldap.bind({"binddn": binddn, "password": "wrongpassword"});
+            });
+        }
     }
 
     #! Test LdapClient::search() method
@@ -430,6 +472,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::add() method
     testAdd() {
+        skipIfReadOnly("add() requires write access");
         LdapClient ldap = getClient();
         cleanupTestEntry();
 
@@ -464,6 +507,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::add() negative cases
     testAddNegative() {
+        skipIfReadOnly("add() requires write access");
         LdapClient ldap = getClient();
 
         # ensure test entry exists
@@ -509,6 +553,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::modify() method
     testModify() {
+        skipIfReadOnly("modify() requires write access");
         LdapClient ldap = getClient();
         createTestEntry();
 
@@ -557,6 +602,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::modify() corner cases
     testModifyCornerCases() {
+        skipIfReadOnly("modify() requires write access");
         LdapClient ldap = getClient();
         createTestEntry();
 
@@ -618,6 +664,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::modify() negative cases
     testModifyNegative() {
+        skipIfReadOnly("modify() requires write access");
         LdapClient ldap = getClient();
         createTestEntry();
 
@@ -674,6 +721,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::compare() method
     testCompare() {
+        skipIfReadOnly("compare() test requires write access to create test entry");
         LdapClient ldap = getClient();
         createTestEntry();
 
@@ -692,6 +740,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::compare() negative cases
     testCompareNegative() {
+        skipIfReadOnly("compare() test requires write access to create test entry");
         LdapClient ldap = getClient();
         createTestEntry();
 
@@ -708,6 +757,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::rename() method
     testRename() {
+        skipIfReadOnly("rename() requires write access");
         LdapClient ldap = getClient();
         createTestEntry();
 
@@ -739,6 +789,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::rename() negative cases
     testRenameNegative() {
+        skipIfReadOnly("rename() requires write access");
         LdapClient ldap = getClient();
         createTestEntry();
 
@@ -755,6 +806,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::del() method
     testDel() {
+        skipIfReadOnly("del() requires write access");
         LdapClient ldap = getClient();
         createTestEntry();
 
@@ -772,6 +824,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClient::del() negative cases
     testDelNegative() {
+        skipIfReadOnly("del() requires write access");
         LdapClient ldap = getClient();
         cleanupTestEntry();
 
@@ -785,6 +838,66 @@ public class OpenLdapTest inherits QUnit::Test {
         assertThrows("LDAP-RESULT-ERROR", sub() {
             ldap.del(peopledn);
         });
+    }
+
+    #! Test LdapClient::passwd() method
+    testPasswd() {
+        skipIfReadOnly("passwd() requires write access");
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        # Note: passwd() requires the LDAP server to support the password modify extended operation
+        # and the user must have permission to change passwords
+        # This test may be skipped on servers that don't support this operation
+        try {
+            # change password
+            ldap.passwd(testEntryDn, "testpassword", "newpassword123");
+
+            # verify by binding with new password
+            LdapClient ldap2(uri, {"binddn": testEntryDn, "password": "newpassword123"});
+            hash<auto> result = ldap2.search({
+                "base": testEntryDn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+            assertTrue(result.hasKey(testEntryDn));
+
+            # change it back
+            ldap.passwd(testEntryDn, "newpassword123", "testpassword");
+        } catch (hash<ExceptionInfo> ex) {
+            # Some LDAP servers don't support passwd extended operation
+            if (ex.err == "LDAP-RESULT-ERROR" && ex.desc =~ /unwilling to perform/i) {
+                testSkip("LDAP server does not support password modify extended operation");
+            } else {
+                rethrow;
+            }
+        }
+    }
+
+    #! Test LdapClient::passwd() negative cases
+    testPasswdNegative() {
+        skipIfReadOnly("passwd() requires write access");
+        LdapClient ldap = getClient();
+        createTestEntry();
+
+        # test passwd on non-existent entry
+        assertThrows("LDAP-RESULT-ERROR", sub() {
+            ldap.passwd("uid=nonexistent,ou=people,dc=example,dc=com", "oldpwd", "newpwd");
+        });
+
+        # test passwd with wrong old password
+        try {
+            assertThrows("LDAP-RESULT-ERROR", sub() {
+                ldap.passwd(testEntryDn, "wrongoldpassword", "newpassword");
+            });
+        } catch (hash<ExceptionInfo> ex) {
+            # Some LDAP servers don't support passwd extended operation
+            if (ex.err == "LDAP-RESULT-ERROR" && ex.desc =~ /unwilling to perform/i) {
+                testSkip("LDAP server does not support password modify extended operation");
+            } else {
+                rethrow;
+            }
+        }
     }
 
     #! Test LdapClient::copy() method
@@ -876,6 +989,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test UTF-8 encoding handling
     testUtf8Encoding() {
+        skipIfReadOnly("UTF-8 test requires write access");
         LdapClient ldap = getClient();
         cleanupTestEntry();
 
@@ -909,6 +1023,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test special characters in attribute values
     testSpecialCharacters() {
+        skipIfReadOnly("special characters test requires write access");
         LdapClient ldap = getClient();
         cleanupTestEntry();
 
@@ -947,6 +1062,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test multi-valued attributes
     testMultiValuedAttributes() {
+        skipIfReadOnly("multi-valued attributes test requires write access");
         LdapClient ldap = getClient();
         cleanupTestEntry();
 
@@ -1117,7 +1233,11 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapClientHelper class
     testLdapClientHelper() {
-        LdapClientHelper helper(uri, {"binddn": binddn, "password": password});
+        hash<auto> opts;
+        if (binddn.val()) {
+            opts = {"binddn": binddn, "password": password};
+        }
+        LdapClientHelper helper(uri, opts);
 
         # test ping
         assertTrue(helper.ping());
@@ -1167,7 +1287,11 @@ public class OpenLdapTest inherits QUnit::Test {
     #! Test LdapConnectionPool basic operations
     testConnectionPool() {
         # test pool creation
-        LdapConnectionPool pool(uri, {"binddn": binddn, "password": password}, {
+        hash<auto> opts;
+        if (binddn.val()) {
+            opts = {"binddn": binddn, "password": password};
+        }
+        LdapConnectionPool pool(uri, opts, {
             "min_connections": 1,
             "max_connections": 3,
         });
@@ -1215,7 +1339,11 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Test LdapConnectionPool withConnection pattern
     testConnectionPoolWithConnection() {
-        LdapConnectionPool pool(uri, {"binddn": binddn, "password": password}, {
+        hash<auto> opts;
+        if (binddn.val()) {
+            opts = {"binddn": binddn, "password": password};
+        }
+        LdapConnectionPool pool(uri, opts, {
             "min_connections": 1,
             "max_connections": 5,
         });
@@ -1259,6 +1387,328 @@ public class OpenLdapTest inherits QUnit::Test {
         # verify connection was still returned despite exception
         stats = pool.getStats();
         assertEq(0, stats.in_use);
+
+        pool.close();
+    }
+
+    #! Test LdapDn corner cases
+    testLdapDnCornerCases() {
+        # test empty DN
+        {
+            LdapDn dn("");
+            assertEq("", dn.toString());
+            assertEq("", dn.getRdn());
+            assertEq("", dn.getRdnValue());
+            assertEq("", dn.getRdnType());
+            assertEq("", dn.getParent());
+        }
+
+        # test DN with spaces
+        {
+            LdapDn dn("cn = Test User , ou = people , dc = example , dc = com");
+            assertEq("cn=Test User", dn.getRdn());
+            assertEq("Test User", dn.getRdnValue());
+            assertEq("cn", dn.getRdnType());
+        }
+
+        # test DN without equals sign (malformed)
+        {
+            LdapDn dn("malformed-dn");
+            assertEq("malformed-dn", dn.toString());
+            assertEq("", dn.getRdn());
+            assertEq("", dn.getRdnValue());
+            assertEq("", dn.getRdnType());
+        }
+
+        # test DN with only one component
+        {
+            LdapDn dn("uid=single");
+            assertEq("uid=single", dn.getRdn());
+            assertEq("single", dn.getRdnValue());
+            assertEq("uid", dn.getRdnType());
+            assertEq("", dn.getParent());
+        }
+
+        # test isChildOf with empty parent
+        {
+            LdapDn dn("uid=test,dc=example,dc=com");
+            assertTrue(dn.isChildOf("dc=com"));
+            assertFalse(dn.isChildOf(""));  # empty parent - find returns -1 which is not > 0
+        }
+    }
+
+    #! Test LdapEntry corner cases
+    testLdapEntryCornerCases() {
+        # test entry with empty attributes
+        {
+            LdapEntry entry("dc=example,dc=com", {});
+            assertEq("dc=example,dc=com", entry.dn);
+            assertFalse(entry.hasAttribute("any"));
+            assertFalse(exists entry.getAttribute("any"));
+            assertFalse(exists entry.getAttributeString("any"));
+            assertEq(0, entry.getAttributeList("any").size());
+            assertEq(0, entry.getAttributeNames().size());
+        }
+
+        # test entry with single-valued objectClass
+        {
+            hash<auto> attrs = {
+                "objectClass": "top",
+                "dc": "example",
+            };
+            LdapEntry entry("dc=example,dc=com", attrs);
+            assertTrue(entry.hasObjectClass("top"));
+            assertTrue(entry.hasObjectClass("TOP"));  # case-insensitive
+            assertFalse(entry.hasObjectClass("organization"));
+        }
+
+        # test entry with no objectClass
+        {
+            hash<auto> attrs = {
+                "dc": "example",
+            };
+            LdapEntry entry("dc=example,dc=com", attrs);
+            assertFalse(entry.hasObjectClass("anything"));
+        }
+
+        # test getAttributeString with single value
+        {
+            hash<auto> attrs = {
+                "cn": "Single Value",
+            };
+            LdapEntry entry("cn=test,dc=example,dc=com", attrs);
+            assertEq("Single Value", entry.getAttributeString("cn"));
+        }
+
+        # test getAttributeList with single value
+        {
+            hash<auto> attrs = {
+                "cn": "Single Value",
+            };
+            LdapEntry entry("cn=test,dc=example,dc=com", attrs);
+            list<auto> values = entry.getAttributeList("cn");
+            assertEq(1, values.size());
+            assertEq("Single Value", values[0]);
+        }
+
+        # test toString
+        {
+            LdapEntry entry("uid=test,dc=example,dc=com", {"uid": "test"});
+            assertEq("LdapEntry(uid=test,dc=example,dc=com)", entry.toString());
+        }
+    }
+
+    #! Test LdapSearchIterator corner cases and negative cases
+    testLdapSearchIteratorNegative() {
+        # test with empty results
+        {
+            LdapSearchIterator iter({});
+            assertEq(0, iter.size());
+            assertFalse(iter.next());
+            assertFalse(iter.valid());
+            assertEq(0, iter.getAll().size());
+        }
+
+        # test getValue before next() - should throw
+        {
+            hash<auto> results = {"dn1": {"attr": "value"}};
+            LdapSearchIterator iter(results);
+            assertThrows("ITERATOR-ERROR", sub() {
+                iter.getValue();
+            });
+        }
+
+        # test getValue after exhausted - should throw
+        {
+            hash<auto> results = {"dn1": {"attr": "value"}};
+            LdapSearchIterator iter(results);
+            assertTrue(iter.next());  # move to first
+            assertFalse(iter.next()); # exhaust
+            assertThrows("ITERATOR-ERROR", sub() {
+                iter.getValue();
+            });
+        }
+
+        # test reset and re-iterate
+        {
+            hash<auto> results = {
+                "dn1": {"cn": "Entry 1"},
+                "dn2": {"cn": "Entry 2"},
+            };
+            LdapSearchIterator iter(results);
+
+            # iterate once
+            int count1 = 0;
+            while (iter.next()) {
+                count1++;
+            }
+            assertEq(2, count1);
+
+            # reset and iterate again
+            iter.reset();
+            int count2 = 0;
+            while (iter.next()) {
+                count2++;
+            }
+            assertEq(2, count2);
+        }
+    }
+
+    #! Test LdapClientHelper corner cases
+    testLdapClientHelperCornerCases() {
+        LdapClientHelper helper(uri, {"binddn": binddn, "password": password});
+
+        # test getEntry with specific attributes
+        {
+            *LdapEntry entry = helper.getEntry(basedn, ("objectClass",));
+            assertTrue(exists entry);
+            assertTrue(entry.hasAttribute("objectClass"));
+        }
+
+        # test creating helper from existing client
+        {
+            LdapClient client = getClient();
+            LdapClientHelper helper2(client);
+            assertTrue(helper2.ping());
+            assertEq(uri, helper2.getClient().getUri());
+        }
+
+        # test methodGate delegation
+        {
+            string gotUri = helper.getUri();
+            assertEq(uri, gotUri);
+        }
+
+        # test entryExists with timeout
+        {
+            assertTrue(helper.entryExists(basedn, 10s));
+        }
+
+        # test searchEntries returns entries with proper DN
+        {
+            list<LdapEntry> entries = helper.searchEntries({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+            assertTrue(entries.size() >= 1);
+            assertTrue(entries[0].dn.size() > 0);
+        }
+    }
+
+    #! Test LdapConnectionPool negative cases
+    testConnectionPoolNegative() {
+        # test invalid min_connections (negative)
+        assertThrows("LDAP-POOL-ERROR", sub() {
+            new LdapConnectionPool(uri, {}, {"min_connections": -1});
+        });
+
+        # test invalid max_connections (less than 1)
+        assertThrows("LDAP-POOL-ERROR", sub() {
+            new LdapConnectionPool(uri, {}, {"max_connections": 0});
+        });
+
+        # test min > max
+        assertThrows("LDAP-POOL-ERROR", sub() {
+            new LdapConnectionPool(uri, {}, {
+                "min_connections": 5,
+                "max_connections": 2,
+            });
+        });
+
+        # test releasing connection not from pool
+        {
+            hash<auto> opts;
+            if (binddn.val()) {
+                opts = {"binddn": binddn, "password": password};
+            }
+            LdapConnectionPool pool(uri, opts, {
+                "min_connections": 0,
+                "max_connections": 2,
+            });
+
+            # create a separate client not from pool
+            LdapClient externalClient(uri, opts);
+
+            # releasing external connection should throw
+            assertThrows("LDAP-POOL-ERROR", sub() {
+                pool.release(externalClient);
+            });
+
+            pool.close();
+        }
+
+        # test double release
+        {
+            hash<auto> opts;
+            if (binddn.val()) {
+                opts = {"binddn": binddn, "password": password};
+            }
+            LdapConnectionPool pool(uri, opts, {
+                "min_connections": 0,
+                "max_connections": 2,
+            });
+
+            LdapClient conn = pool.get();
+            pool.release(conn);
+
+            # second release should throw
+            assertThrows("LDAP-POOL-ERROR", sub() {
+                pool.release(conn);
+            });
+
+            pool.close();
+        }
+
+        # test get after shutdown
+        {
+            hash<auto> opts;
+            if (binddn.val()) {
+                opts = {"binddn": binddn, "password": password};
+            }
+            LdapConnectionPool pool(uri, opts, {
+                "min_connections": 1,
+                "max_connections": 2,
+            });
+
+            pool.close();
+
+            assertThrows("LDAP-POOL-SHUTDOWN", sub() {
+                pool.get();
+            });
+        }
+    }
+
+    #! Test LdapConnectionPool cleanup functionality
+    testConnectionPoolCleanup() {
+        hash<auto> opts;
+        if (binddn.val()) {
+            opts = {"binddn": binddn, "password": password};
+        }
+        LdapConnectionPool pool(uri, opts, {
+            "min_connections": 1,
+            "max_connections": 5,
+            "idle_timeout": 1,  # 1 second
+        });
+
+        # get and release some connections to populate pool
+        LdapClient c1 = pool.get();
+        LdapClient c2 = pool.get();
+        pool.release(c1);
+        pool.release(c2);
+
+        hash<auto> stats = pool.getStats();
+        assertTrue(stats.available >= 2);
+
+        # wait for idle timeout
+        sleep(2s);
+
+        # run cleanup
+        pool.cleanupIdleConnections();
+
+        # should have removed some connections but kept at least min_connections
+        stats = pool.getStats();
+        assertTrue(stats.total >= 1);  # min_connections
 
         pool.close();
     }

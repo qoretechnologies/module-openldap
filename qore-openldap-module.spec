@@ -1,6 +1,7 @@
 %define mod_ver 1.3
 %define module_api %(qore --latest-module-api 2>/dev/null)
 %define module_dir %{_libdir}/qore-modules
+%define user_module_dir %{_datadir}/qore-modules
 
 %if 0%{?sles_version}
 
@@ -77,7 +78,7 @@ openldap module.
 
 %files doc
 %defattr(-,root,root,-)
-%doc docs/openldap test
+%doc docs/openldap test bin
 
 %prep
 %setup -q
@@ -91,7 +92,7 @@ export CXXFLAGS="%{?optflags}"
 cmake -DCMAKE_INSTALL_PREFIX=%{_prefix} -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -DCMAKE_SKIP_RPATH=1 -DCMAKE_SKIP_INSTALL_RPATH=1 -DCMAKE_SKIP_BUILD_RPATH=1 -DCMAKE_PREFIX_PATH=${_prefix}/lib64/cmake/Qore .
 make %{?_smp_mflags}
 make %{?_smp_mflags} docs
-sed -i 's/#!\/usr\/bin\/env qore/#!\/usr\/bin\/qore/' test/q*
+sed -i 's/#!\/usr\/bin\/env qore/#!\/usr\/bin\/qore/' bin/q*
 
 %install
 make DESTDIR=%{buildroot} install %{?_smp_mflags}
@@ -102,18 +103,26 @@ rm -rf $RPM_BUILD_ROOT
 %files
 %defattr(-,root,root,-)
 %{module_dir}
+%{user_module_dir}
+%{_bindir}/qldapadd
+%{_bindir}/qldapdelete
+%{_bindir}/qldapmodify
+%{_bindir}/qldappasswd
+%{_bindir}/qldapsearch
 %doc COPYING.MIT COPYING.LGPL README RELEASE-NOTES AUTHORS
 
 %changelog
-* Tue Dec 31 2024 David Nichols <david@qore.org> 1.3
+* Mon Jan 20 2026 David Nichols <david@qore.org> 1.3
 - updated to version 1.3
 - critical fix: fixed null-termination bug in QoreLDAPMod causing segfaults
   when adding or modifying entries with multi-valued attributes
 - fixed unreachable code in del() method
 - fixed return type issues in compare() and isSecure() methods
 - added NULL check for ldap_get_dn() result
-- added comprehensive automated test suite
-- added LdapConnectionPool and LdapHelper Qore modules
+- added comprehensive automated test suite with full test coverage
+- added LdapConnectionPool and LdapHelper Qore user modules
+- added qldapadd, qldapdelete, qldapmodify, qldappasswd, qldapsearch CLI tools
+- added passwd() test coverage
 
 * Sat Dec 17 2022 David Nichols <david@qore.org> 1.2.3
 - updated to version 1.2.3

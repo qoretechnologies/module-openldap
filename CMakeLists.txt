@@ -64,6 +64,20 @@ endif()
 
 qore_external_binary_module(${module_name} "${PROJECT_VERSION}" ${OpenLDAP_LIB_R})
 
+# Install user modules
+qore_external_user_module("qlib/LdapHelper.qm" "")
+qore_external_user_module("qlib/LdapConnectionPool.qm" "")
+
+# Install bin scripts
+install(PROGRAMS
+    bin/qldapadd
+    bin/qldapdelete
+    bin/qldapmodify
+    bin/qldappasswd
+    bin/qldapsearch
+    DESTINATION bin
+)
+
 qore_dist("${PROJECT_VERSION}")
 
 qore_config_info()

@@ -1,4 +1,5 @@
 modverdir = $(libdir)/$(mymodverdir)
+usermoddir = $(datadir)/qore-modules
 
 AUTOMAKE_OPTIONS = foreign
 
@@ -6,16 +7,18 @@ SUBDIRS = src
 
 noinst_HEADERS = src/QoreLdapClient.h
 
+USER_MODULES = qlib/LdapHelper.qm qlib/LdapConnectionPool.qm
+
 EXTRA_DIST = COPYING.MIT COPYING.LGPL AUTHORS README \
 	RELEASE-NOTES \
 	src/QC_LdapClient.qpp \
 	src/openldap-module.h \
-	test/qldapadd \
-	test/qldapmodify \
-	test/qldapdelete \
-	test/qldapsearch \
-	test/qldappasswd \
-	qore-openldap-module.spec
+	qore-openldap-module.spec \
+	$(USER_MODULES)
+
+bin_SCRIPTS = bin/qldapadd bin/qldapdelete bin/qldapmodify bin/qldappasswd bin/qldapsearch
+
+usermod_DATA = $(USER_MODULES)
 
 ACLOCAL_AMFLAGS=-I m4
 
