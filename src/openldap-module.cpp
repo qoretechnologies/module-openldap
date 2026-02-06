@@ -23,27 +23,24 @@
 
 #include "QoreLdapClient.h"
 
-static QoreStringNode *openldap_module_init();
-static void openldap_module_ns_init(QoreNamespace *rns, QoreNamespace *qns);
+static void openldap_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink);
+static void openldap_module_ns_init(QoreNamespace* rns, QoreNamespace* qns, ExceptionSink& xsink);
 static void openldap_module_delete();
 
-// qore module symbols
-DLLEXPORT char qore_module_name[] = "openldap";
-DLLEXPORT char qore_module_version[] = PACKAGE_VERSION;
-DLLEXPORT char qore_module_description[] = "openldap module";
-DLLEXPORT char qore_module_author[] = "David Nichols";
-DLLEXPORT char qore_module_url[] = "http://qore.org";
-DLLEXPORT int qore_module_api_major = QORE_MODULE_API_MAJOR;
-DLLEXPORT int qore_module_api_minor = QORE_MODULE_API_MINOR;
-DLLEXPORT qore_module_init_t qore_module_init = openldap_module_init;
-DLLEXPORT qore_module_ns_init_t qore_module_ns_init = openldap_module_ns_init;
-DLLEXPORT qore_module_delete_t qore_module_delete = openldap_module_delete;
-#ifdef _QORE_HAS_QL_MIT
-DLLEXPORT qore_license_t qore_module_license = QL_MIT;
-#else
-DLLEXPORT qore_license_t qore_module_license = QL_LGPL;
-#endif
-DLLEXPORT char qore_module_license_str[] = "MIT";
+extern "C" DLLEXPORT void openldap_qore_module_desc(QoreModuleInfo& mod_info) {
+    mod_info.name = "openldap";
+    mod_info.version = PACKAGE_VERSION;
+    mod_info.desc = "openldap module";
+    mod_info.author = "David Nichols";
+    mod_info.url = "http://qore.org";
+    mod_info.api_major = QORE_MODULE_API_MAJOR;
+    mod_info.api_minor = QORE_MODULE_API_MINOR;
+    mod_info.init = openldap_module_init;
+    mod_info.ns_init = openldap_module_ns_init;
+    mod_info.del = openldap_module_delete;
+    mod_info.license = QL_MIT;
+    mod_info.license_str = "MIT";
+}
 
 DLLLOCAL QoreClass* initLdapClientClass(QoreNamespace& ns);
 
@@ -52,22 +49,22 @@ ModMap modmap;
 
 static QoreNamespace OLNS("Qore::OpenLdap");
 
-static QoreStringNode* openldap_module_init() {
+static void openldap_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
    // this also serves to initialize the library in a single-threaded way
    QoreStringNode* err = QoreLdapClient::checkLibrary();
-   if (err)
-      return err;
+   if (err) {
+      xsink.raiseException("MODULE-INIT-ERROR", err);
+      return;
+   }
 
    // disable openssl cleanup when using the openldap module, since it will do that itself, and
    // calling openssl cleanup routines twice can cause segmentation faults
    qore_set_library_cleanup_options(QLO_DISABLE_OPENSSL_CLEANUP);
 
    OLNS.addSystemClass(initLdapClientClass(OLNS));
-
-   return 0;
 }
 
-static void openldap_module_ns_init(QoreNamespace* rns, QoreNamespace* qns) {
+static void openldap_module_ns_init(QoreNamespace* rns, QoreNamespace* qns, ExceptionSink& xsink) {
    qns->addNamespace(OLNS.copy());
 }
 
