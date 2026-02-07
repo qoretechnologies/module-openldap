@@ -44,9 +44,7 @@ module LdapConnectionPool {
     @section ldapconnectionpool_example Example Usage
 
     @code{.qore}
-%new-style
-%require-types
-%strict-args
+%modern
 
 %requires LdapConnectionPool
 
