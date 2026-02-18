@@ -53,7 +53,7 @@ set(QORE_DOX_TMPL_SRC
   docs/mainpage.doxygen.tmpl
 )
 
-qore_wrap_qpp_value(QPP_CPP_SRC ${QPP_SRC})
+qore_wrap_qpp_value(QPP_CPP_SRC METALIST QPP_META_SRC ${QPP_SRC})
 
 add_library(${module_name} MODULE ${QPP_CPP_SRC} ${CPP_SRC})
 target_include_directories(${module_name} PUBLIC ${OpenLDAP_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/src)
@@ -79,6 +79,14 @@ install(PROGRAMS
 )
 
 qore_dist("${PROJECT_VERSION}")
+
+# install qpp metadata files
+if (COMMAND qore_install_qpp_metadata)
+    qore_install_qpp_metadata(${module_name} ${QPP_META_SRC})
+else()
+    install(FILES ${QPP_META_SRC}
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/qore/metadata)
+endif()
 
 qore_config_info()
 
