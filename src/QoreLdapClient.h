@@ -4,7 +4,7 @@
 
     Qore Programming Language
 
-    Copyright 2012 - 2024 Qore Technologies, s.r.o.
+    Copyright 2012 - 2026 Qore Technologies, s.r.o.
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Lesser General Public
@@ -595,7 +595,7 @@ protected:
             timeout = my_timeout_ms;
 
         // Check for interrupt before connection
-        if (qore_check_io_interrupt(xsink))
+        if (qore_check_cancel(xsink))
             return -1;
 
         // force a connection to the server with an empty search request and ignore the result
@@ -640,7 +640,7 @@ protected:
             return -1;
 
         // Check for interrupt before bind
-        if (qore_check_io_interrupt(xsink))
+        if (qore_check_cancel(xsink))
             return -1;
 
         int msgid;
@@ -771,7 +771,7 @@ public:
             return 0;
 
         // Check for interrupt before search
-        if (qore_check_io_interrupt(xsink))
+        if (qore_check_cancel(xsink))
             return 0;
 
         int msgid;
@@ -866,7 +866,7 @@ public:
             return -1;
 
         // Check for interrupt before add
-        if (qore_check_io_interrupt(xsink))
+        if (qore_check_cancel(xsink))
             return -1;
 
         int msgid;
@@ -899,7 +899,7 @@ public:
             return -1;
 
         // Check for interrupt before modify
-        if (qore_check_io_interrupt(xsink))
+        if (qore_check_cancel(xsink))
             return -1;
 
         int msgid;
@@ -928,7 +928,7 @@ public:
             return -1;
 
         // Check for interrupt before delete
-        if (qore_check_io_interrupt(xsink))
+        if (qore_check_cancel(xsink))
             return -1;
 
         int msgid;
@@ -965,7 +965,7 @@ public:
             return false;
 
         // Check for interrupt before compare
-        if (qore_check_io_interrupt(xsink))
+        if (qore_check_cancel(xsink))
             return false;
 
         int msgid;
@@ -1013,7 +1013,7 @@ public:
             return -1;
 
         // Check for interrupt before rename
-        if (qore_check_io_interrupt(xsink))
+        if (qore_check_cancel(xsink))
             return -1;
 
         //printd(5, "LdapClient::rename() dn: '%s' newrdn: '%s' newparent: '%s' deleteoldrdn: %d\n", dnstr->getBuffer(), newrdnstr->getBuffer(), newparentstr->getBuffer(), (int)deleteoldrdn);
@@ -1052,7 +1052,7 @@ public:
             return -1;
 
         // Check for interrupt before passwd
-        if (qore_check_io_interrupt(xsink))
+        if (qore_check_cancel(xsink))
             return -1;
 
         //printd(5, "LdapClient::passwd() dn: '%s' old: '%s' new: '%s'\n", dnstr->getBuffer(), opstr->getBuffer(), npstr->getBuffer());
