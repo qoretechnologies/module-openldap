@@ -152,6 +152,8 @@ public class OpenLdapTest inherits QUnit::Test {
         addTestCase("LDIF line folding test", \testLdifLineFolding());
         addTestCase("LDIF binary values test", \testLdifBinaryValues());
         addTestCase("LdapUrl IPv6 test", \testLdapUrlIpv6());
+        addTestCase("rootDSE search test", \testRootDseSearch());
+        addTestCase("LDAP_SCOPE_BASE correctness test", \testScopeBaseCorrectness());
         addTestCase("LdapSchema isBinaryAttribute test", \testSchemaBinaryAttribute());
         addTestCase("LdapClient::copy() search test", \testCopySearch());
         addTestCase("Transaction OID constants test", \testTxnConstants());
@@ -2308,38 +2310,98 @@ public class OpenLdapTest inherits QUnit::Test {
     }
 
     #! Test schema introspection
+    #! Test rootDSE search (base="", scope=BASE)
+    testRootDseSearch() {
+        LdapClient ldap = getClient();
+
+        # rootDSE search should return exactly 1 entry with empty DN key
+        hash<auto> r = ldap.search({
+            "base": "",
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+            "attributes": ("namingContexts", "supportedSASLMechanisms", "supportedExtension"),
+        });
+        assertEq(1, r.size());
+        assertTrue(r.hasKey(""));
+
+        # verify rootDSE attributes
+        hash<auto> rootDse = r{""};
+        assertTrue(rootDse.hasKey("namingContexts"));
+        assertEq("dc=example,dc=com", rootDse.namingContexts);
+
+        # SASL mechanisms should be present
+        assertTrue(rootDse.hasKey("supportedSASLMechanisms"));
+
+        # supported extensions should include Who Am I? and passwd modify
+        assertTrue(rootDse.hasKey("supportedExtension"));
+    }
+
+    #! Test LDAP_SCOPE_BASE returns exactly 1 entry
+    testScopeBaseCorrectness() {
+        LdapClient ldap = getClient();
+
+        # SCOPE_BASE on a subtree base should return exactly 1 entry (the base itself)
+        hash<auto> r = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertEq(1, r.size());
+        assertTrue(r.hasKey(basedn));
+
+        # Compare with SCOPE_SUBTREE which should return more
+        hash<auto> r2 = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_SUBTREE,
+        });
+        assertTrue(r2.size() > 1);
+
+        # SCOPE_ONELEVEL should return immediate children only (not the base)
+        hash<auto> r3 = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_ONELEVEL,
+        });
+        assertTrue(r3.size() >= 1);
+        assertFalse(r3.hasKey(basedn));
+    }
+
     testLdapSchema() {
         LdapClient ldap = getClient();
 
         LdapSchema schema(ldap);
 
-        # test getObjectClassNames — may be empty if server doesn't expose schema
+        # schema should load successfully now that rootDSE search works
         list<string> ocNames = schema.getObjectClassNames();
         list<string> atNames = schema.getAttributeTypeNames();
 
-        if (ocNames.empty()) {
-            # server doesn't support schema introspection — test basic API still works
-            assertFalse(exists schema.getObjectClass("top"));
-            assertFalse(exists schema.getAttributeType("cn"));
-            assertEq((), schema.getRequiredAttributes("top"));
-            assertFalse(schema.isBinaryAttribute("cn"));
-        } else {
-            assertTrue(ocNames.size() > 0);
-            assertTrue(atNames.size() > 0);
+        assertTrue(ocNames.size() > 0);
+        assertTrue(atNames.size() > 0);
 
-            # verify a well-known object class exists
-            bool found_oc = False;
-            for (int i = 0; i < ocNames.size(); i++) {
-                if (ocNames[i].lwr() == "top" || ocNames[i].lwr() == "organization") {
-                    found_oc = True;
-                    break;
-                }
-            }
-            assertTrue(found_oc);
-        }
+        # verify well-known "top" object class
+        *hash<LdapObjectClassInfo> top = schema.getObjectClass("top");
+        assertTrue(exists top);
+        assertEq("top", top.name);
+        assertEq("ABSTRACT", top.kind);
+        assertTrue(inlist("objectClass", top.must));
 
-        # test non-existent class always returns NOTHING
+        # verify well-known "cn" attribute type
+        *hash<LdapAttributeTypeInfo> cn = schema.getAttributeType("cn");
+        assertTrue(exists cn);
+        assertEq("cn", cn.name);
+
+        # verify getRequiredAttributes
+        list<string> topMust = schema.getRequiredAttributes("top");
+        assertTrue(inlist("objectClass", topMust));
+
+        # verify getOptionalAttributes returns a list
+        list<string> topMay = schema.getOptionalAttributes("top");
+        assertEq(Type::List, topMay.type());
+
+        # test non-existent class returns NOTHING
         assertFalse(exists schema.getObjectClass("nonExistentClass12345"));
+        assertFalse(exists schema.getAttributeType("nonExistentAttr12345"));
     }
 
     #! Test LDIF reader
@@ -2922,13 +2984,13 @@ public class OpenLdapTest inherits QUnit::Test {
         LdapClient ldap = getClient();
         LdapSchema schema(ldap);
 
-        # test with known syntax OIDs if schema was loaded
-        if (schema.getAttributeTypeNames().size() > 0) {
-            # cn should not be binary
-            assertFalse(schema.isBinaryAttribute("cn"));
-        }
+        # cn should not be binary
+        assertFalse(schema.isBinaryAttribute("cn"));
 
-        # test with non-existent attribute — should return False
+        # jpegPhoto should be binary (JPEG syntax OID)
+        assertTrue(schema.isBinaryAttribute("jpegPhoto"));
+
+        # non-existent attribute — should return False
         assertFalse(schema.isBinaryAttribute("nonExistentAttr12345"));
     }
 
