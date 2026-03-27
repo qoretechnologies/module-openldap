@@ -19,7 +19,7 @@ endif()
 include(CheckCXXCompilerFlag)
 
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
-find_package(Qore 1.12.4 REQUIRED)
+find_package(Qore 2.3 REQUIRED)
 
 if (APPLE)
     set(CMAKE_FIND_FRAMEWORK NEVER)

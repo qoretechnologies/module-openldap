@@ -1138,80 +1138,52 @@ public class LdapSchema {
 
     #! Parse an RFC 4512 objectClass definition string
     private static hash<LdapObjectClassInfo> parseObjectClass(string def) {
-        hash<LdapObjectClassInfo> oc;
-        # extract OID
-        *list<*string> oid_match = regex_extract(def, "\\(\\s*([0-9.]+)");
-        if (exists oid_match) {
-            oc.oid = oid_match[0];
-        }
-        # extract NAME
-        *list<*string> name_match = regex_extract(def, "NAME\\s+'([^']+)'");
-        if (exists name_match) {
-            oc.name = name_match[0];
-        }
-        # extract DESC
-        *list<*string> desc_match = regex_extract(def, "DESC\\s+'([^']*)'");
-        if (exists desc_match) {
-            oc.description = desc_match[0];
-        }
-        # extract SUP
-        *list<*string> sup_match = regex_extract(def, "SUP\\s+(\\S+)");
-        if (exists sup_match) {
-            oc.superior = sup_match[0];
-        }
-        # extract kind
+        auto oid_match = regex_extract(def, "\\(\\s*([0-9.]+)");
+        auto name_match = regex_extract(def, "NAME\\s+'([^']+)'");
+        auto desc_match = regex_extract(def, "DESC\\s+'([^']*)'");
+        auto sup_match = regex_extract(def, "SUP\\s+(\\S+)");
+
+        string kind = "STRUCTURAL";
         if (def =~ /ABSTRACT/) {
-            oc.kind = "ABSTRACT";
+            kind = "ABSTRACT";
         } else if (def =~ /AUXILIARY/) {
-            oc.kind = "AUXILIARY";
-        } else {
-            oc.kind = "STRUCTURAL";
+            kind = "AUXILIARY";
         }
-        # extract MUST
-        oc.must = extractAttrList(def, "MUST");
-        # extract MAY
-        oc.may = extractAttrList(def, "MAY");
-        return oc;
+
+        return <LdapObjectClassInfo>{
+            "oid": exists oid_match ? oid_match[0] : "",
+            "name": exists name_match ? name_match[0] : "",
+            "description": exists desc_match ? desc_match[0] : NOTHING,
+            "superior": exists sup_match ? sup_match[0] : NOTHING,
+            "kind": kind,
+            "must": extractAttrList(def, "MUST"),
+            "may": extractAttrList(def, "MAY"),
+        };
     }
 
     #! Parse an RFC 4512 attributeType definition string
     private static hash<LdapAttributeTypeInfo> parseAttributeType(string def) {
-        hash<LdapAttributeTypeInfo> at;
-        *list<*string> oid_match = regex_extract(def, "\\(\\s*([0-9.]+)");
-        if (exists oid_match) {
-            at.oid = oid_match[0];
-        }
-        *list<*string> name_match = regex_extract(def, "NAME\\s+'([^']+)'");
-        if (exists name_match) {
-            at.name = name_match[0];
-        }
-        *list<*string> desc_match = regex_extract(def, "DESC\\s+'([^']*)'");
-        if (exists desc_match) {
-            at.description = desc_match[0];
-        }
-        *list<*string> syntax_match = regex_extract(def, "SYNTAX\\s+([0-9.]+)");
-        if (exists syntax_match) {
-            at.syntax = syntax_match[0];
-        }
-        *list<*string> sup_match = regex_extract(def, "SUP\\s+(\\S+)");
-        if (exists sup_match) {
-            at.superior = sup_match[0];
-        }
-        *list<*string> eq_match = regex_extract(def, "EQUALITY\\s+(\\S+)");
-        if (exists eq_match) {
-            at.equality = eq_match[0];
-        }
-        *list<*string> ord_match = regex_extract(def, "ORDERING\\s+(\\S+)");
-        if (exists ord_match) {
-            at.ordering = ord_match[0];
-        }
-        *list<*string> sub_match = regex_extract(def, "SUBSTR\\s+(\\S+)");
-        if (exists sub_match) {
-            at.substr = sub_match[0];
-        }
-        at.singleValue = def =~ /SINGLE-VALUE/;
-        at.noUserMod = def =~ /NO-USER-MODIFICATION/;
-        return at;
+        auto oid_match = regex_extract(def, "\\(\\s*([0-9.]+)");
+        auto name_match = regex_extract(def, "NAME\\s+'([^']+)'");
+        auto desc_match = regex_extract(def, "DESC\\s+'([^']*)'");
+        auto syntax_match = regex_extract(def, "SYNTAX\\s+([0-9.]+)");
+        auto sup_match = regex_extract(def, "SUP\\s+(\\S+)");
+        auto eq_match = regex_extract(def, "EQUALITY\\s+(\\S+)");
+        auto ord_match = regex_extract(def, "ORDERING\\s+(\\S+)");
+        auto sub_match = regex_extract(def, "SUBSTR\\s+(\\S+)");
+
+        return <LdapAttributeTypeInfo>{
+            "oid": exists oid_match ? oid_match[0] : "",
+            "name": exists name_match ? name_match[0] : "",
+            "description": exists desc_match ? desc_match[0] : NOTHING,
+            "syntax": exists syntax_match ? syntax_match[0] : NOTHING,
+            "singleValue": boolean(def =~ /SINGLE-VALUE/),
+            "noUserMod": boolean(def =~ /NO-USER-MODIFICATION/),
+            "superior": exists sup_match ? sup_match[0] : NOTHING,
+            "equality": exists eq_match ? eq_match[0] : NOTHING,
+            "ordering": exists ord_match ? ord_match[0] : NOTHING,
+            "substr": exists sub_match ? sub_match[0] : NOTHING,
+        };
     }
 
     #! Extract an attribute list (MUST or MAY) from a schema definition

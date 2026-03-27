@@ -190,7 +190,7 @@ const DefaultTimeout = 60s;
 //! The LdapClient class
 /**
  */
-qclass LdapClient [arg=QoreLdapClient* ldap; dom=NETWORK; ns=OpenLdap];
+qclass LdapClient [arg=QoreLdapClient* ldap; dom=NETWORK; ns=OpenLdap; flags=final];
 
 //! Creates a new LdapClient object and establishes a connection to the server with optional bind parameters
 /** A connection to the server is made with an empty search request even if no bind parameters are given.
@@ -346,11 +346,14 @@ hash LdapClient::search(hash h, *timeout timeout_ms, *softlist controls) {
         }
     }
 
-    // get scope
+    // get scope — default to SUBTREE if not specified
+    // note: LDAP_SCOPE_BASE == 0, so we check if the key exists
     n = h->getKeyValue("scope");
-    int scope = n.getAsBigInt();
-    if (!scope) {
+    int scope;
+    if (n.isNullOrNothing()) {
         scope = LDAP_SCOPE_SUBTREE;
+    } else {
+        scope = (int)n.getAsBigInt();
     }
 
     // get controls from parameter or from search options hash

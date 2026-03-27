@@ -1123,7 +1123,7 @@ public:
             return 0;
 
         int msgid;
-        if (checkLdapError("search", "ldap_search_ext", ldap_search_ext(ldp, bstr->empty() ? 0 : bstr->getBuffer(), scope, fstr->empty() ? 0 : fstr->getBuffer(), *attrs, (int)attrsonly, sctrls, 0, 0, 0, &msgid), xsink))
+        if (checkLdapError("search", "ldap_search_ext", ldap_search_ext(ldp, bstr->getBuffer(), scope, fstr->empty() ? 0 : fstr->getBuffer(), *attrs, (int)attrsonly, sctrls, 0, 0, 0, &msgid), xsink))
             return 0;
 
         LDAPMessage* res = 0;
@@ -1317,7 +1317,7 @@ public:
 
             int msgid;
             rc = ldap_search_ext(ldp,
-                bstr->empty() ? nullptr : bstr->getBuffer(),
+                bstr->getBuffer(),
                 scope,
                 fstr->empty() ? nullptr : fstr->getBuffer(),
                 *attrs, (int)attrsonly,
