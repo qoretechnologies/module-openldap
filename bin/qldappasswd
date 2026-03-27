@@ -3,65 +3,39 @@
 
 %modern
 
-# uses the openldap module
 %requires openldap
+%requires Util
+%requires qore >= 2.3
 
-# ensure minimum version of qore
-%requires qore >= 0.8.7
+%include qldaplib.ql
 
 main();
 
-const Defaults = (
-    "uri": "ldap://localhost:389",
-    );
-
-const opts = (
-    # change password
+const PasswdOpts = CommonOpts + {
     "oldpwd": "a,old=s",
     "promptold": "A,prompt-old",
     "newpwd": "s,new=s",
     "promptnew": "S,prompt-new",
-
-    # common
-    "uri": "H,uri=s",
-    "binddn": "D,binddn=s",
-    "password": "w,passwd=s",
-    "promptbind": "W,prompt-bind",
-    "info": "i,info",
-    "verbose": "v,verbose",
-    "timeout": "l,timeout=i",
-    "protocol": "P,protocol=i",
-    "no-referrals": "r,no-referrals",
-    "starttls": "Z,starttls",
-    "help": "h,help",
-    );
-
-const LdapOptions = ("binddn", "password", "timeout", "protocol", "no-referrals", "starttls");
+};
 
 sub main() {
-    # process command-line options
-    GetOpt g(opts);
+    GetOpt g(PasswdOpts);
     hash opts = g.parse3(\ARGV);
-    if (opts.help)
-	usage();
 
-    if (opts.info) {
-	printf("%N\n", LdapClient::getInfo());
-	exit(0);
+    Util::TerminalColor color(!opts.nocolor);
+
+    if (opts.help) {
+        usage(color);
     }
+
+    handle_common_opts(opts, color);
 
     *string dn = shift ARGV;
-    if (!dn)
-        error("missing dn of user to change password for");
-
-    if (!opts.uri)
-	opts.uri = Defaults.uri;
-
-    if (opts.promptbind) {
-        stdout.printf("Enter LDAP Bind Password: ");
-        TerminalInputHelper t();
-        opts.password = t.getLine();
+    if (!dn) {
+        ldap_error(color, "missing dn of user to change password for");
     }
+
+    process_bind_password(\opts);
 
     if (opts.promptold) {
         stdout.printf("Enter Old Password: ");
@@ -72,120 +46,47 @@ sub main() {
     if (opts.promptnew) {
         stdout.printf("Enter New Password: ");
         TerminalInputHelper t();
-        string op1 = t.getLine();
+        string p1 = t.getLine();
         stdout.printf("Re-enter New Password: ");
-        string op2 = t.getLine();
-        if (op1 != op2)
-            error("new passwords do not match");
-
-        opts.newpwd = op1;
-    }
-
-    if (!opts.oldpwd)
-        error("missing old password (use -a or -A)");
-
-    if (!opts.newpwd)
-        error("missing new password (use -s or -S)");
-
-    hash lopt = opts{LdapOptions};
-
-    if (opts.verbose)
-        printf("uri: %y, lopt: %y, dn: %y\n", opts.uri, lopt, dn);
-
-    LdapClient ldap(opts.uri, lopt);
-    ldap.passwd(dn, opts.oldpwd, opts.newpwd);
-}
-
-sub error(string fmt) {
-    fmt = sprintf("%s: %s\n", get_script_name(), fmt);
-    stderr.vprintf(fmt, argv);
-    exit(1);
-}
-
-sub usage() {
-    printf("usage: %s [options] <dn>
-Password Change Options:
-  -a,--old=ARG       old password
-  -A,--prompt-old    prompt for old password
-  -s,--new=ARG       new password
-  -S,--prompt-new    prompt for new password
-
-Common LDAP Options:
-  -D,--binddn=ARG    bind DN
-  -H,--uri=ARG       LDAP Uniform Resource Identifier(s)
-  -l,--timeout=ARG   set timeout in milliseconds (default: %y)
-  -P,--protocol=ARG  set protocol version (default: 3)
-  -r,--no-referrals  do not chase referrals
-  -v,--verbose       verbose mode; shows more information
-  -w,--passwd=ARG    bind password (for simple authentication)
-  -W,--prompt-bind   prompt for bind password
-  -Z,--starttls      ensure a secure connection
-
-Other Options:
-  -i,--info          show ldap library info and exit
-  -h,--help          this help text
-", get_script_name(), OpenLdap::DefaultTimeout);
-    exit(0);
-}
-
-class TerminalInputHelper {
-    private {
-        # saved original terminal attributes
-        TermIOS orig = stdin.getTerminalAttributes();
-
-        # input terminal attributes
-        TermIOS input;
-
-        # restore flag
-        bool rest = False;
-    }
-
-    public {}
-
-    constructor() {
-        input = orig.copy();
-
-        # get local flags
-        int lflag = input.getLFlag();
-
-        # turn on "raw" mode: disable canonical input mode
-        lflag &= ~ICANON;
-
-        # turn off echo mode
-        lflag &= ~ECHO;
-
-        # set the new local flags
-        input.setLFlag(lflag);
-
-        # turn off input buffering: set minimum characters to return on a read
-        input.setCC(VMIN, 1);
-
-        # disable input timer: set character input timer to 0.1 second increments
-        input.setCC(VTIME, 0);
-    }
-
-    destructor() {
-        if (rest)
-            restore();
-    }
-
-    *string getLine() {
-        # set input attributes
-        stdin.setTerminalAttributes(TCSADRAIN, input);
-        rest = True;
-
-        # restore attributes on exit
-        on_exit {
-            stdin.setTerminalAttributes(TCSADRAIN, orig);
-            rest = False;
-            stdout.print("\n");
+        string p2 = t.getLine();
+        if (p1 != p2) {
+            ldap_error(color, "new passwords do not match");
         }
-
-        return stdin.readLine(False);
+        opts.newpwd = p1;
     }
 
-    restore() {
-        # restore terminal attributes
-        stdin.setTerminalAttributes(TCSADRAIN, orig);
+    if (!opts.oldpwd) {
+        ldap_error(color, "missing old password (use -a or -A)");
     }
+    if (!opts.newpwd) {
+        ldap_error(color, "missing new password (use -s or -S)");
+    }
+
+    string uri = get_uri(opts);
+    hash lopt = opts{LdapOptionKeys};
+
+    if (opts.verbose) {
+        printf("%s %s\n", color.dim("uri:"), uri);
+        printf("%s %s\n", color.dim("dn:"), dn);
+    }
+
+    try {
+        LdapClient ldap(uri, lopt);
+        ldap.passwd(dn, opts.oldpwd, opts.newpwd);
+        ldap_success(color, sprintf("password changed for: %s", dn));
+    } catch (hash<ExceptionInfo> ex) {
+        ldap_error(color, "%s: %s", ex.err, ex.desc);
+    }
+}
+
+sub usage(Util::TerminalColor color) {
+    printf("%s %s [options] <dn>\n\n", color.bold("usage:"), get_script_name());
+    printf("%s\n", color.bold("Password Change Options:"));
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-a,--old=ARG", 22)), "old password");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-A,--prompt-old", 22)), "prompt for old password");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-s,--new=ARG", 22)), "new password");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-S,--prompt-new", 22)), "prompt for new password");
+    printf("\n");
+    print_common_usage(color);
+    exit(0);
 }

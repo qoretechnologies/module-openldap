@@ -87,12 +87,17 @@ qore_external_user_module("qlib/LdapActiveDirectory.qm" "")
 # Install bin scripts
 install(PROGRAMS
     bin/qldapadd
+    bin/qldapcompare
     bin/qldapdelete
     bin/qldapmodify
     bin/qldappasswd
     bin/qldapsearch
+    bin/qldapwhoami
     DESTINATION bin
 )
+
+# Install shared library for bin scripts
+install(FILES bin/qldaplib.ql DESTINATION bin)
 
 qore_dist("${PROJECT_VERSION}")
 

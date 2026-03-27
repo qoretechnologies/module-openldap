@@ -3,185 +3,84 @@
 
 %modern
 
-# uses the openldap module
 %requires openldap
+%requires Util
+%requires qore >= 2.3
 
-# ensure minimum version of qore
-%requires qore >= 0.8.7
+%include qldaplib.ql
 
 main();
 
-const Defaults = (
-    "uri": "ldap://localhost:389",
-    );
-
-const opts = (
-    # add
+const AddOpts = CommonOpts + {
     "sep": "s,separator=s",
-
-    # common
-    "uri": "H,uri=s",
-    "binddn": "D,binddn=s",
-    "password": "w,passwd=s",
-    "promptbind": "W,prompt-bind",
-    "info": "i,info",
-    "verbose": "v,verbose",
-    "timeout": "l,timeout=i",
-    "protocol": "P,protocol=i",
-    "no-referrals": "r,no-referrals",
-    "starttls": "Z,starttls",
-    "help": "h,help",
-    );
-
-const LdapOptions = ("binddn", "password", "timeout", "protocol", "no-referrals", "starttls");
+};
 
 sub main() {
-    # process command-line options
-    GetOpt g(opts);
+    GetOpt g(AddOpts);
     hash opts = g.parse3(\ARGV);
-    if (opts.help)
-	usage();
 
-    if (opts.info) {
-	printf("%N\n", LdapClient::getInfo());
-	exit(0);
+    Util::TerminalColor color(!opts.nocolor);
+
+    if (opts.help) {
+        usage(color);
     }
+
+    handle_common_opts(opts, color);
 
     *string dn = shift ARGV;
-    if (!dn)
-        error("missing dn to add");
-
-    if (opts.sep) {
-        if (opts.sep.length() > 1)
-            error("separator character can only be max 1 character long (value given: %y; size %d characters)", opts.sep, opts.sep.length());
+    if (!dn) {
+        ldap_error(color, "missing dn to add");
     }
-    else
-        opts.sep = ",";
 
-    if (!opts.uri)
-	opts.uri = Defaults.uri;
+    string sep = opts.sep ?? ",";
+    if (sep.length() > 1) {
+        ldap_error(color, "separator character can only be max 1 character long (value given: %y; size %d characters)", sep, sep.length());
+    }
 
     # get attribute hash
     hash attr;
     while (ARGV) {
         string attrstr = shift ARGV;
-
-        (*string key, any val) = (attrstr =~ x/^([^=]+)=(.*)$/);
-        if (!key)
-            error("attribute not in <key>=<value> format: '%s'", attrstr);
-        if (attr{key})
-            error("attribute '%s' specified twice", key);
-
-        if (val && val.find(opts.sep) != -1)
-            val = val.split(opts.sep);
-
+        (*string key, auto val) = (attrstr =~ x/^([^=]+)=(.*)$/);
+        if (!key) {
+            ldap_error(color, "attribute not in <key>=<value> format: '%s'", attrstr);
+        }
+        if (attr{key}) {
+            ldap_error(color, "attribute '%s' specified twice", key);
+        }
+        if (val && string(val).find(sep) != -1) {
+            val = string(val).split(sep);
+        }
         attr{key} = val;
     }
-    if (!attr)
-        error("missing attributes for '%s'", dn);
-
-    if (opts.promptbind) {
-        stdout.printf("Enter LDAP Bind Password: ");
-        TerminalInputHelper t();
-        opts.password = t.getLine();
+    if (!attr) {
+        ldap_error(color, "missing attributes for '%s'", dn);
     }
 
-    hash lopt = opts{LdapOptions};
+    process_bind_password(\opts);
+    string uri = get_uri(opts);
+    hash lopt = opts{LdapOptionKeys};
 
-    if (opts.verbose)
-        printf("uri: %y, lopt: %y, dn: %y, attr: %y\n", opts.uri, lopt, dn, attr);
+    if (opts.verbose) {
+        printf("%s %s\n", color.dim("uri:"), uri);
+        printf("%s %s\n", color.dim("dn:"), dn);
+        printf("%s %s\n", color.dim("attrs:"), color.formatValue(attr));
+    }
 
-    LdapClient ldap(opts.uri, lopt);
-    ldap.add(dn, attr);
+    try {
+        LdapClient ldap(uri, lopt);
+        ldap.add(dn, attr);
+        ldap_success(color, sprintf("added entry: %s", dn));
+    } catch (hash<ExceptionInfo> ex) {
+        ldap_error(color, "%s: %s", ex.err, ex.desc);
+    }
 }
 
-sub error(string fmt) {
-    fmt = sprintf("%s: %s\n", get_script_name(), fmt);
-    stderr.vprintf(fmt, argv);
-    exit(1);
-}
-
-sub usage() {
-    printf("usage: %s [options] <dn> <attr>=<value> [<attr>=<value> ...]
-Add Options:
-  -s,--separator=ARG  specify list separator char (default: ',')
-
-Common LDAP Options:
-  -D,--binddn=ARG     bind DN
-  -H,--uri=ARG        LDAP Uniform Resource Identifier(s)
-  -l,--timeout=ARG    set timeout in milliseconds (default: %y)
-  -P,--protocol=ARG   set protocol version (default: 3)
-  -r,--no-referrals   do not chase referrals
-  -v,--verbose        verbose mode; shows more information
-  -w,--passwd=ARG     bind password (for simple authentication)
-  -W,--prompt-bind    prompt for bind password
-  -Z,--starttls       ensure a secure connection
-
-Other Options:
-  -i,--info           show ldap library info and exit
-  -h,--help           this help text
-", get_script_name(), OpenLdap::DefaultTimeout);
+sub usage(Util::TerminalColor color) {
+    printf("%s %s [options] <dn> <attr>=<value> [...]\n\n", color.bold("usage:"), get_script_name());
+    printf("%s\n", color.bold("Add Options:"));
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-s,--separator=ARG", 22)), sprintf("list separator char %s", color.dim("(default: ',')")));
+    printf("\n");
+    print_common_usage(color);
     exit(0);
-}
-
-class TerminalInputHelper {
-    private {
-        # saved original terminal attributes
-        TermIOS orig = stdin.getTerminalAttributes();
-
-        # input terminal attributes
-        TermIOS input;
-
-        # restore flag
-        bool rest = False;
-    }
-
-    public {}
-
-    constructor() {
-        input = orig.copy();
-
-        # get local flags
-        int lflag = input.getLFlag();
-
-        # turn on "raw" mode: disable canonical input mode
-        lflag &= ~ICANON;
-
-        # turn off echo mode
-        lflag &= ~ECHO;
-
-        # set the new local flags
-        input.setLFlag(lflag);
-
-        # turn off input buffering: set minimum characters to return on a read
-        input.setCC(VMIN, 1);
-
-        # disable input timer: set character input timer to 0.1 second increments
-        input.setCC(VTIME, 0);
-    }
-
-    destructor() {
-        if (rest)
-            restore();
-    }
-
-    *string getLine() {
-        # set input attributes
-        stdin.setTerminalAttributes(TCSADRAIN, input);
-        rest = True;
-
-        # restore attributes on exit
-        on_exit {
-            stdin.setTerminalAttributes(TCSADRAIN, orig);
-            rest = False;
-            stdout.print("\n");
-        }
-
-        return stdin.readLine(False);
-    }
-
-    restore() {
-        # restore terminal attributes
-        stdin.setTerminalAttributes(TCSADRAIN, orig);
-    }
 }

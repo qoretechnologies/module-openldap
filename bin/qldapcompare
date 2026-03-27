@@ -25,7 +25,17 @@ sub main() {
 
     *string dn = shift ARGV;
     if (!dn) {
-        ldap_error(color, "missing dn to delete");
+        ldap_error(color, "missing dn for comparison");
+    }
+
+    *string attr = shift ARGV;
+    if (!attr) {
+        ldap_error(color, "missing attribute name for comparison");
+    }
+
+    *string value = shift ARGV;
+    if (!value) {
+        ldap_error(color, "missing value for comparison");
     }
 
     process_bind_password(\opts);
@@ -35,19 +45,27 @@ sub main() {
     if (opts.verbose) {
         printf("%s %s\n", color.dim("uri:"), uri);
         printf("%s %s\n", color.dim("dn:"), dn);
+        printf("%s %s=%s\n", color.dim("compare:"), attr, value);
     }
 
     try {
         LdapClient ldap(uri, lopt);
-        ldap.del(dn);
-        ldap_success(color, sprintf("deleted entry: %s", dn));
+        bool match = ldap.compare(dn, attr, value);
+        if (match) {
+            printf("%s\n", color.success("TRUE"));
+        } else {
+            printf("%s\n", color.error("FALSE"));
+        }
+        exit(match ? 0 : 1);
     } catch (hash<ExceptionInfo> ex) {
         ldap_error(color, "%s: %s", ex.err, ex.desc);
     }
 }
 
 sub usage(Util::TerminalColor color) {
-    printf("%s %s [options] <dn>\n\n", color.bold("usage:"), get_script_name());
+    printf("%s %s [options] <dn> <attribute> <value>\n\n", color.bold("usage:"), get_script_name());
+    printf("Compares an attribute value in an LDAP entry.\n");
+    printf("Exit code 0 = match, 1 = no match.\n\n");
     print_common_usage(color);
     exit(0);
 }

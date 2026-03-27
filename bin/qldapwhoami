@@ -22,32 +22,31 @@ sub main() {
     }
 
     handle_common_opts(opts, color);
-
-    *string dn = shift ARGV;
-    if (!dn) {
-        ldap_error(color, "missing dn to delete");
-    }
-
     process_bind_password(\opts);
     string uri = get_uri(opts);
     hash lopt = opts{LdapOptionKeys};
 
     if (opts.verbose) {
         printf("%s %s\n", color.dim("uri:"), uri);
-        printf("%s %s\n", color.dim("dn:"), dn);
     }
 
     try {
         LdapClient ldap(uri, lopt);
-        ldap.del(dn);
-        ldap_success(color, sprintf("deleted entry: %s", dn));
+        hash<auto> result = ldap.extendedOp(LDAP_EXOP_WHO_AM_I);
+        if (exists result.value) {
+            printf("%s\n", result.value.toString("UTF-8"));
+        } else {
+            printf("%s\n", color.dim("anonymous"));
+        }
     } catch (hash<ExceptionInfo> ex) {
         ldap_error(color, "%s: %s", ex.err, ex.desc);
     }
 }
 
 sub usage(Util::TerminalColor color) {
-    printf("%s %s [options] <dn>\n\n", color.bold("usage:"), get_script_name());
+    printf("%s %s [options]\n\n", color.bold("usage:"), get_script_name());
+    printf("Performs a Who Am I? extended operation (RFC 4532) and prints the\n");
+    printf("authorization identity of the current connection.\n\n");
     print_common_usage(color);
     exit(0);
 }

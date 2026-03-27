@@ -1,0 +1,189 @@
+# -*- mode: qore; indent-tabs-mode: nil -*-
+#! @file qldaplib.ql shared code for qldap* CLI tools
+
+/*  qldaplib.ql Copyright 2026 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+const DefaultUri = "ldap://localhost:389";
+
+const CommonOpts = {
+    "uri": "H,uri=s",
+    "binddn": "D,binddn=s",
+    "password": "w,passwd=s",
+    "promptbind": "W,prompt-bind",
+    "info": "i,info",
+    "verbose": "v,verbose",
+    "timeout": "l,timeout=i",
+    "protocol": "P,protocol=i",
+    "no-referrals": "r,no-referrals",
+    "starttls": "Z,starttls",
+    "nocolor": "C,no-color",
+    "help": "h,help",
+};
+
+const LdapOptionKeys = ("binddn", "password", "timeout", "protocol", "no-referrals", "starttls");
+
+sub ldap_error(Util::TerminalColor color, string fmt) {
+    string msg = vsprintf(fmt, argv);
+    stderr.printf("%s %s\n", color.error("ERROR:"), msg);
+    exit(1);
+}
+
+sub ldap_success(Util::TerminalColor color, string msg) {
+    printf("%s\n", color.success(msg));
+}
+
+sub process_bind_password(reference<hash> opts) {
+    if (opts.promptbind) {
+        stdout.printf("Enter LDAP Bind Password: ");
+        TerminalInputHelper t();
+        opts.password = t.getLine();
+    }
+}
+
+string sub get_uri(hash opts) {
+    return string(opts.uri ?? DefaultUri);
+}
+
+sub print_common_usage(Util::TerminalColor color) {
+    printf("%s\n", color.bold("Common LDAP Options:"));
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-D,--binddn=ARG", 22)), "bind DN");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-H,--uri=ARG", 22)), "LDAP Uniform Resource Identifier(s)");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-l,--timeout=ARG", 22)), sprintf("set timeout in milliseconds %s", color.dim(sprintf("(default: %y)", OpenLdap::DefaultTimeout))));
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-P,--protocol=ARG", 22)), sprintf("set protocol version %s", color.dim("(default: 3)")));
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-r,--no-referrals", 22)), "do not chase referrals");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-v,--verbose", 22)), "verbose mode");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-w,--passwd=ARG", 22)), "bind password (for simple authentication)");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-W,--prompt-bind", 22)), "prompt for bind password");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-Z,--starttls", 22)), "ensure a secure connection");
+    printf("\n%s\n", color.bold("Other Options:"));
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-C,--no-color", 22)), "disable colored output");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-i,--info", 22)), "show ldap library info and exit");
+    printf("  %s  %s\n", color.key(TerminalColor::padRight("-h,--help", 22)), "this help text");
+}
+
+sub handle_common_opts(hash opts, Util::TerminalColor color) {
+    if (opts.info) {
+        printf("%s\n", color.bold("OpenLDAP Library Info:"));
+        hash<auto> info = LdapClient::getInfo();
+        foreach string k in (keys info) {
+            printf("  %s: %s\n", color.key(k), color.formatValue(info{k}));
+        }
+        exit(0);
+    }
+}
+
+#! Print a single LDAP entry in colored format
+sub print_entry(Util::TerminalColor color, string dn, hash<auto> attrs) {
+    printf("%s %s\n", color.dim("dn:"), color.bold(dn));
+    foreach string name in (keys attrs) {
+        auto val = attrs{name};
+        if (val.typeCode() == NT_LIST) {
+            foreach auto v in (val) {
+                printf("  %s: %s\n", color.key(name), color.value(string(v)));
+            }
+        } else {
+            printf("  %s: %s\n", color.key(name), color.value(string(val)));
+        }
+    }
+    printf("\n");
+}
+
+#! Print a single LDAP entry in LDIF format (uncolored)
+sub print_ldif_entry(string dn, hash<auto> attrs) {
+    printf("dn: %s\n", dn);
+    foreach string name in (keys attrs) {
+        auto val = attrs{name};
+        if (val.typeCode() == NT_LIST) {
+            foreach auto v in (val) {
+                print_ldif_attr(name, v);
+            }
+        } else {
+            print_ldif_attr(name, val);
+        }
+    }
+    printf("\n");
+}
+
+sub print_ldif_attr(string name, auto val) {
+    if (val.typeCode() == NT_BINARY) {
+        printf("%s:: %s\n", name, make_base64_string(val));
+    } else {
+        string sval = string(val);
+        # base64 encode if value contains non-ASCII or starts with special chars
+        bool needs_b64 = False;
+        if (sval.size() > 0 && (sval[0] == " " || sval[0] == ":" || sval[0] == "<")) {
+            needs_b64 = True;
+        }
+        if (!needs_b64) {
+            for (int i = 0; i < sval.size(); i++) {
+                if (ord(sval[i]) > 127 || ord(sval[i]) < 32) {
+                    needs_b64 = True;
+                    break;
+                }
+            }
+        }
+        if (needs_b64) {
+            printf("%s:: %s\n", name, make_base64_string(sval));
+        } else {
+            printf("%s: %s\n", name, sval);
+        }
+    }
+}
+
+class TerminalInputHelper {
+    private {
+        TermIOS orig = stdin.getTerminalAttributes();
+        TermIOS input;
+        bool rest = False;
+    }
+
+    constructor() {
+        input = orig.copy();
+        int lflag = input.getLFlag();
+        lflag &= ~ICANON;
+        lflag &= ~ECHO;
+        input.setLFlag(lflag);
+        input.setCC(VMIN, 1);
+        input.setCC(VTIME, 0);
+    }
+
+    destructor() {
+        if (rest) {
+            restore();
+        }
+    }
+
+    *string getLine() {
+        stdin.setTerminalAttributes(TCSADRAIN, input);
+        rest = True;
+        on_exit {
+            stdin.setTerminalAttributes(TCSADRAIN, orig);
+            rest = False;
+            stdout.print("\n");
+        }
+        return stdin.readLine(False);
+    }
+
+    restore() {
+        stdin.setTerminalAttributes(TCSADRAIN, orig);
+    }
+}
