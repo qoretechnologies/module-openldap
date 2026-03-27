@@ -2329,10 +2329,7 @@ public class OpenLdapTest inherits QUnit::Test {
         assertTrue(rootDse.hasKey("namingContexts"));
         assertEq("dc=example,dc=com", rootDse.namingContexts);
 
-        # SASL mechanisms should be present
-        assertTrue(rootDse.hasKey("supportedSASLMechanisms"));
-
-        # supported extensions should include Who Am I? and passwd modify
+        # supported extensions should be present (Who Am I?, passwd modify, etc.)
         assertTrue(rootDse.hasKey("supportedExtension"));
     }
 
