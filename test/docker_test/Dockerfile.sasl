@@ -1,0 +1,8 @@
+FROM osixia/openldap:1.5.0
+
+# Install saslpasswd2 for creating SASL users
+RUN apt-get update && apt-get install -y sasl2-bin && rm -rf /var/lib/apt/lists/*
+
+# Create SASL user database and configure slapd SASL regex
+COPY setup-sasl.sh /container/service/slapd/assets/config/bootstrap/ldif/custom/
+RUN chmod +x /container/service/slapd/assets/config/bootstrap/ldif/custom/setup-sasl.sh

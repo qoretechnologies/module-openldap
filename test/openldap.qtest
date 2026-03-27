@@ -36,6 +36,11 @@ public class OpenLdapTest inherits QUnit::Test {
 
         # flag for anonymous bind (no write operations allowed)
         bool anonymousBind = False;
+
+        # SASL test settings (optional — set LDAP_SASL_URI to enable)
+        *string saslUri;
+        *string saslUser;
+        *string saslPassword;
     }
 
     constructor() : Test("OpenLdapTest", "1.0") {
@@ -58,6 +63,11 @@ public class OpenLdapTest inherits QUnit::Test {
         groupsdn = ENV.LDAP_GROUPSDN ?? DefaultGroupsDn;
 
         testEntryDn = sprintf("uid=qoretest,%s", peopledn);
+
+        # SASL test settings
+        saslUri = ENV.LDAP_SASL_URI;
+        saslUser = ENV.LDAP_SASL_USER ?? "testuser1";
+        saslPassword = ENV.LDAP_SASL_PASSWORD ?? "testpassword";
 
         # Core functionality tests
         addTestCase("LdapClient::getInfo() test", \testGetInfo());
@@ -118,6 +128,9 @@ public class OpenLdapTest inherits QUnit::Test {
         addTestCase("Extended operation negative test", \testExtendedOpNegative());
         addTestCase("Paged results test", \testPagedResults());
         addTestCase("SASL bind negative test", \testSaslBindNegative());
+        addTestCase("SASL DIGEST-MD5 bind test", \testSaslDigestMd5());
+        addTestCase("SASL CRAM-MD5 bind test", \testSaslCramMd5());
+        addTestCase("SASL bind wrong password test", \testSaslWrongPassword());
         addTestCase("LdapAsync test", \testLdapAsync());
         addTestCase("LdapAsync error propagation test", \testLdapAsyncErrors());
         addTestCase("LdapUrl parsing test", \testLdapUrl());
@@ -2056,6 +2069,76 @@ public class OpenLdapTest inherits QUnit::Test {
         # unsupported mechanism (server may not support DIGEST-MD5)
         assertThrows("LDAP-ERROR", sub() {
             ldap.saslBind({"mechanism": "DIGEST-MD5", "authcid": "test", "password": "wrong"});
+        });
+    }
+
+    #! Helper: check if SASL server is configured
+    private bool hasSaslServer() {
+        return exists saslUri;
+    }
+
+    #! Test SASL DIGEST-MD5 bind (requires LDAP_SASL_URI)
+    testSaslDigestMd5() {
+        if (!hasSaslServer()) {
+            testSkip("Skipped: set LDAP_SASL_URI to enable SASL tests (e.g., ldap://localhost:2389)");
+            return;
+        }
+        LdapClient ldap(saslUri);
+
+        # perform DIGEST-MD5 bind
+        ldap.saslBind({
+            "mechanism": "DIGEST-MD5",
+            "authcid": saslUser,
+            "password": saslPassword,
+        });
+
+        # verify we can search after SASL bind
+        hash<auto> result = ldap.search({
+            "base": "dc=example,dc=com",
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(result.size() > 0);
+    }
+
+    #! Test SASL CRAM-MD5 bind (requires LDAP_SASL_URI)
+    testSaslCramMd5() {
+        if (!hasSaslServer()) {
+            testSkip("Skipped: set LDAP_SASL_URI to enable SASL tests");
+            return;
+        }
+        LdapClient ldap(saslUri);
+
+        # perform CRAM-MD5 bind
+        ldap.saslBind({
+            "mechanism": "CRAM-MD5",
+            "authcid": saslUser,
+            "password": saslPassword,
+        });
+
+        # verify search works
+        hash<auto> result = ldap.search({
+            "base": "dc=example,dc=com",
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(result.size() > 0);
+    }
+
+    #! Test SASL bind with wrong password (requires LDAP_SASL_URI)
+    testSaslWrongPassword() {
+        if (!hasSaslServer()) {
+            testSkip("Skipped: set LDAP_SASL_URI to enable SASL tests");
+            return;
+        }
+        LdapClient ldap(saslUri);
+
+        assertThrows("LDAP-ERROR", sub() {
+            ldap.saslBind({
+                "mechanism": "DIGEST-MD5",
+                "authcid": saslUser,
+                "password": "completely-wrong-password",
+            });
         });
     }
 
