@@ -129,6 +129,18 @@ public class OpenLdapTest inherits QUnit::Test {
         addTestCase("ActiveDirectoryClient GUID/SID decoding test", \testAdDecoding());
         addTestCase("LdapClientHelper whoAmI test", \testWhoAmI());
         addTestCase("Extended op OID constants test", \testExtOpConstants());
+        addTestCase("Controls on all operations test", \testControlsAllOps());
+        addTestCase("DN escaping additional tests", \testDnEscapingAdditional());
+        addTestCase("Binary attributes constructor option test", \testBinaryConstructorOption());
+        addTestCase("Binary multi-valued attributes test", \testBinaryMultiValued());
+        addTestCase("LdapAsync additional operations test", \testLdapAsyncAdditional());
+        addTestCase("LdapAsync timeout test", \testLdapAsyncTimeout());
+        addTestCase("LDIF change records test", \testLdifChangeRecords());
+        addTestCase("LDIF line folding test", \testLdifLineFolding());
+        addTestCase("LDIF binary values test", \testLdifBinaryValues());
+        addTestCase("LdapUrl IPv6 test", \testLdapUrlIpv6());
+        addTestCase("LdapSchema isBinaryAttribute test", \testSchemaBinaryAttribute());
+        addTestCase("LdapClient::copy() search test", \testCopySearch());
         addTestCase("Transaction OID constants test", \testTxnConstants());
         addTestCase("Transaction support test", \testTransaction());
         addTestCase("Transaction abort test", \testTransactionAbort());
@@ -2454,6 +2466,416 @@ public class OpenLdapTest inherits QUnit::Test {
         assertTrue(stats.total >= 1);  # min_connections
 
         pool.close();
+    }
+
+    # ============================================================
+    # Additional comprehensive tests
+    # ============================================================
+
+    #! Test controls parameter on all write operations
+    testControlsAllOps() {
+        skipIfReadOnly("controls on all ops requires write access");
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+
+        # add with empty controls
+        ldap.add(testEntryDn, {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest", "cn": "Test", "sn": "Test",
+            "uidNumber": "99999", "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+            "description": "controls test",
+        }, NOTHING, ());
+
+        # modify with empty controls
+        ldap.modify(testEntryDn, ({
+            "mod": LDAP_MOD_REPLACE, "attr": "description", "value": "modified",
+        },), NOTHING, ());
+
+        # compare with empty controls
+        bool match = ldap.compare(testEntryDn, "uid", "qoretest", NOTHING, ());
+        assertTrue(match);
+
+        # del with empty controls
+        ldap.del(testEntryDn, NOTHING, ());
+
+        # verify deleted — search should throw or return empty
+        bool deleted = False;
+        try {
+            hash<auto> r = ldap.search({
+                "base": testEntryDn, "filter": "(objectClass=*)", "scope": LDAP_SCOPE_BASE,
+            });
+            deleted = !r.hasKey(testEntryDn);
+        } catch (hash<ExceptionInfo> ex) {
+            deleted = True;
+        }
+        assertTrue(deleted);
+    }
+
+    #! Test additional DN escaping cases
+    testDnEscapingAdditional() {
+        # multi-byte UTF-8 hex escape: \C3\A9 = é
+        {
+            string unescaped = LdapDn::unescape("caf\\c3\\a9");
+            assertEq("café", unescaped);
+        }
+
+        # escaped leading space inside value
+        {
+            string escaped = LdapDn::escape(" leading space");
+            assertEq("\\ leading space", escaped);
+            assertEq(" leading space", LdapDn::unescape(escaped));
+        }
+
+        # trailing space
+        {
+            string escaped = LdapDn::escape("trailing ");
+            assertEq("trailing\\ ", escaped);
+            assertEq("trailing ", LdapDn::unescape(escaped));
+        }
+
+        # special characters that always need escaping
+        {
+            string raw = ",+\"\\<>;=";
+            string escaped = LdapDn::escape(raw);
+            # every char should be escaped with backslash prefix
+            assertEq(raw.size() * 2, escaped.size());
+            assertEq(raw, LdapDn::unescape(escaped));
+        }
+
+        # '#' only escaped at start
+        {
+            assertEq("\\#start", LdapDn::escape("#start"));
+            assertEq("mid#dle", LdapDn::escape("mid#dle"));
+        }
+
+        # DN with multiple escaped commas
+        {
+            LdapDn dn("CN=Last\\, First\\, Jr.,OU=Users,DC=test,DC=com");
+            assertEq("Last, First, Jr.", dn.getRdnValue());
+            assertEq("OU=Users,DC=test,DC=com", dn.getParent());
+            assertEq(4, dn.depth());
+        }
+
+        # isChildOf with escaped DNs
+        {
+            LdapDn dn("CN=Smith\\, John,OU=Users,DC=example,DC=com");
+            assertTrue(dn.isChildOf("OU=Users,DC=example,DC=com"));
+            assertFalse(dn.isChildOf("OU=Groups,DC=example,DC=com"));
+        }
+    }
+
+    #! Test constructor binary-attributes option
+    testBinaryConstructorOption() {
+        skipIfReadOnly("binary constructor option test requires write access");
+
+        # create entry with description
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+        ldap.add(testEntryDn, {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest", "cn": "Test", "sn": "Test",
+            "uidNumber": "99999", "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+            "description": "test binary option",
+        });
+
+        # create client with constructor binary-attributes
+        hash allbin_opts = {
+            "binary-attributes": ("description",),
+        };
+        if (binddn.val()) {
+            allbin_opts.binddn = binddn;
+            allbin_opts.password = password;
+        }
+        LdapClient binClient(uri, allbin_opts);
+
+        hash<auto> result = binClient.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+            "attributes": ("description", "uid"),
+        });
+        assertTrue(result.hasKey(testEntryDn));
+        # description should be binary (from constructor option)
+        assertEq(NT_BINARY, result{testEntryDn}.description.typeCode());
+        # uid should still be string (not in binary list)
+        assertEq(Type::String, result{testEntryDn}.uid.type());
+
+        ldap.del(testEntryDn);
+    }
+
+    #! Test binary attributes with multi-valued attributes
+    testBinaryMultiValued() {
+        skipIfReadOnly("binary multi-valued test requires write access");
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+
+        # create entry with multi-valued attribute
+        ldap.add(testEntryDn, {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest", "cn": "Test", "sn": "Test",
+            "uidNumber": "99999", "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+            "description": ("desc1", "desc2", "desc3"),
+        });
+
+        # search with binary-attributes forcing description to binary
+        hash<auto> result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+            "attributes": ("description",),
+            "binary-attributes": ("description",),
+        });
+        auto desc = result{testEntryDn}.description;
+        # should be a list of binary values
+        assertEq(NT_LIST, desc.typeCode());
+        assertEq(3, desc.size());
+        assertEq(NT_BINARY, desc[0].typeCode());
+        assertEq(NT_BINARY, desc[1].typeCode());
+        assertEq(NT_BINARY, desc[2].typeCode());
+        # verify content
+        assertEq("desc1", desc[0].toString("UTF-8"));
+
+        ldap.del(testEntryDn);
+    }
+
+    #! Test async modify/compare operations
+    testLdapAsyncAdditional() {
+        skipIfReadOnly("async additional ops requires write access");
+        hash<auto> asyncOpts;
+        if (binddn.val()) {
+            asyncOpts = {"binddn": binddn, "password": password};
+        }
+        LdapAsyncClient async(uri, asyncOpts);
+        LdapClient ldap = getClient();
+
+        # setup test entry
+        cleanupTestEntry();
+        ldap.add(testEntryDn, {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest", "cn": "Test", "sn": "Test",
+            "uidNumber": "99999", "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+            "description": "async test",
+        });
+
+        # async modify
+        LdapFuture mf = async.modifyAsync(testEntryDn, ({
+            "mod": LDAP_MOD_REPLACE, "attr": "description", "value": "async modified",
+        },));
+        mf.get(30s);
+
+        # verify
+        hash<auto> r = ldap.search({
+            "base": testEntryDn, "filter": "(objectClass=*)", "scope": LDAP_SCOPE_BASE,
+            "attributes": ("description",),
+        });
+        assertEq("async modified", r{testEntryDn}.description);
+
+        # async compare
+        LdapFuture cf = async.compareAsync(testEntryDn, "uid", "qoretest");
+        assertTrue(cf.get(30s));
+
+        # async compare negative
+        LdapFuture cf2 = async.compareAsync(testEntryDn, "uid", "nonexistent");
+        assertFalse(cf2.get(30s));
+
+        # cleanup
+        ldap.del(testEntryDn);
+    }
+
+    #! Test LdapFuture timeout
+    testLdapAsyncTimeout() {
+        # use an unreachable host to cause a timeout
+        LdapAsyncClient async("ldap://192.0.2.1:389");  # TEST-NET, should be unreachable
+
+        LdapFuture f = async.searchAsync({
+            "base": "dc=example,dc=com",
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        }, 1s);  # 1-second LDAP timeout
+
+        # the Future.get() should either throw FUTURE-TIMEOUT or an LDAP error
+        bool got_error = False;
+        try {
+            f.get(5s);  # give it 5 seconds for the LDAP timeout + overhead
+        } catch (hash<ExceptionInfo> ex) {
+            got_error = True;
+            assertTrue(ex.err == "FUTURE-TIMEOUT" || ex.err =~ /LDAP/);
+        }
+        assertTrue(got_error);
+    }
+
+    #! Test LDIF change records (modify, modrdn, delete)
+    testLdifChangeRecords() {
+        # modify change record
+        list<string> modLines = (
+            "dn: uid=test,ou=people,dc=example,dc=com",
+            "changetype: modify",
+            "replace: description",
+            "description: new description",
+            "-",
+            "add: mail",
+            "mail: test@example.com",
+            "-",
+            "",
+        );
+        LdifReader reader(modLines);
+        *hash<LdifChangeInfo> change = reader.readChange();
+        assertTrue(exists change);
+        assertEq("uid=test,ou=people,dc=example,dc=com", change.dn);
+        assertEq("modify", change.changetype);
+        assertEq(2, change.modifications.size());
+        assertEq("replace", change.modifications[0].mod);
+        assertEq("description", change.modifications[0].attr);
+        assertEq("new description", change.modifications[0].value);
+        assertEq("add", change.modifications[1].mod);
+        assertEq("mail", change.modifications[1].attr);
+
+        # modrdn change record
+        list<string> modrdnLines = (
+            "dn: uid=old,ou=people,dc=example,dc=com",
+            "changetype: modrdn",
+            "newrdn: uid=new",
+            "deleteoldrdn: 1",
+            "newsuperior: ou=users,dc=example,dc=com",
+            "",
+        );
+        LdifReader rdnReader(modrdnLines);
+        *hash<LdifChangeInfo> rdnChange = rdnReader.readChange();
+        assertTrue(exists rdnChange);
+        assertEq("modrdn", rdnChange.changetype);
+        assertEq("uid=new", rdnChange.newrdn);
+        assertTrue(rdnChange.deleteoldrdn);
+        assertEq("ou=users,dc=example,dc=com", rdnChange.newsuperior);
+
+        # delete change record
+        list<string> delLines = (
+            "dn: uid=del,ou=people,dc=example,dc=com",
+            "changetype: delete",
+            "",
+        );
+        LdifReader delReader(delLines);
+        *hash<LdifChangeInfo> delChange = delReader.readChange();
+        assertTrue(exists delChange);
+        assertEq("delete", delChange.changetype);
+        assertEq("uid=del,ou=people,dc=example,dc=com", delChange.dn);
+    }
+
+    #! Test LDIF line folding
+    testLdifLineFolding() {
+        # line folding: continuation line starts with a single space
+        list<string> lines = (
+            "dn: uid=test,ou=people,dc=example,dc=com",
+            "description: This is a very long description that has been folded",
+            " across multiple lines in the LDIF file for readability",
+            "",
+        );
+        LdifReader reader(lines);
+        *hash<LdifEntryInfo> entry = reader.readEntry();
+        assertTrue(exists entry);
+        assertEq("This is a very long description that has been foldedacross multiple lines in the LDIF file for readability", entry.attributes.description);
+
+        # line folding in writer — write a long value and read it back
+        string tmpFile = "/tmp/qore-ldif-fold-" + string(getpid()) + ".ldif";
+        {
+            LdifWriter writer(tmpFile);
+            string longVal = strmul("A", 200);  # 200 character value
+            writer.writeEntry("dc=test,dc=com", {"longattr": longVal});
+        }
+        {
+            LdifReader reader2(tmpFile);
+            *hash<LdifEntryInfo> entry2 = reader2.readEntry();
+            assertTrue(exists entry2);
+            assertEq(200, entry2.attributes.longattr.size());
+            assertEq(strmul("A", 200), entry2.attributes.longattr);
+        }
+        unlink(tmpFile);
+    }
+
+    #! Test LDIF with binary values
+    testLdifBinaryValues() {
+        string tmpFile = "/tmp/qore-ldif-bin-" + string(getpid()) + ".ldif";
+        {
+            LdifWriter writer(tmpFile);
+            # write entry with binary value
+            writer.writeEntry("dc=test,dc=com", {
+                "objectClass": "top",
+                "binaryAttr": <deadbeef>,
+            });
+        }
+        {
+            # read it back — base64 encoded binary
+            LdifReader reader(tmpFile);
+            *hash<LdifEntryInfo> entry = reader.readEntry();
+            assertTrue(exists entry);
+            assertTrue(entry.attributes.hasKey("binaryAttr"));
+        }
+        unlink(tmpFile);
+    }
+
+    #! Test LDAP URL with IPv6 address
+    testLdapUrlIpv6() {
+        {
+            LdapUrl url("ldap://[::1]:389/dc=test,dc=com");
+            assertEq("ldap", url.scheme);
+            assertEq("::1", url.host);
+            assertEq(389, url.port);
+            assertEq("dc=test,dc=com", url.baseDn);
+        }
+
+        # IPv6 without port
+        {
+            LdapUrl url("ldap://[fe80::1]/dc=test");
+            assertEq("fe80::1", url.host);
+            assertFalse(exists url.port);
+        }
+    }
+
+    #! Test LdapSchema isBinaryAttribute
+    testSchemaBinaryAttribute() {
+        LdapClient ldap = getClient();
+        LdapSchema schema(ldap);
+
+        # test with known syntax OIDs if schema was loaded
+        if (schema.getAttributeTypeNames().size() > 0) {
+            # cn should not be binary
+            assertFalse(schema.isBinaryAttribute("cn"));
+        }
+
+        # test with non-existent attribute — should return False
+        assertFalse(schema.isBinaryAttribute("nonExistentAttr12345"));
+    }
+
+    #! Test copy() constructor produces working search results
+    testCopySearch() {
+        LdapClient c1 = getClient();
+
+        # search on original
+        hash<auto> r1 = c1.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(r1.size() > 0);
+
+        # copy and search
+        LdapClient c2 = c1.copy();
+        hash<auto> r2 = c2.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+
+        # copy should return the same results
+        assertEq(r1.size(), r2.size());
+
+        # verify same keys
+        list<string> k1 = sort(keys r1);
+        list<string> k2 = sort(keys r2);
+        assertEq(k1, k2);
     }
 
     # ============================================================

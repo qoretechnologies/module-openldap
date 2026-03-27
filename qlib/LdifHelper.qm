@@ -214,9 +214,13 @@ public class LdifReader {
             return NOTHING;
         }
 
-        hash<LdifChangeInfo> change;
+        *string dn;
+        *string changetype;
         hash<auto> attrs;
         list<auto> mods = ();
+        *string newrdn;
+        *bool deleteoldrdn;
+        *string newsuperior;
 
         int i = 0;
         # parse dn
@@ -224,11 +228,11 @@ public class LdifReader {
             auto parsed = parseLine(block[i]);
             i++;
             if (exists parsed && parsed.name.lwr() == "dn") {
-                change.dn = string(parsed.value);
+                dn = string(parsed.value);
                 break;
             }
         }
-        if (!exists change.dn) {
+        if (!exists dn) {
             return NOTHING;
         }
 
@@ -237,16 +241,16 @@ public class LdifReader {
             auto parsed = parseLine(block[i]);
             i++;
             if (exists parsed && parsed.name.lwr() == "changetype") {
-                change.changetype = string(parsed.value);
+                changetype = string(parsed.value);
                 break;
             }
         }
-        if (!exists change.changetype) {
-            change.changetype = "add";  # default
+        if (!exists changetype) {
+            changetype = "add";
         }
 
         # parse remaining based on changetype
-        switch (change.changetype) {
+        switch (changetype) {
             case "add":
                 while (i < block.size()) {
                     auto parsed = parseLine(block[i]);
@@ -264,7 +268,6 @@ public class LdifReader {
                         }
                     }
                 }
-                change.attributes = attrs;
                 break;
 
             case "modify":
@@ -276,7 +279,7 @@ public class LdifReader {
                     }
                     auto parsed = parseLine(line);
                     if (exists parsed) {
-                        string action = parsed.name;  # add, delete, replace
+                        string action = parsed.name;
                         string attr_name = string(parsed.value);
                         list<auto> values = ();
                         while (i < block.size() && block[i] != "-") {
@@ -296,7 +299,6 @@ public class LdifReader {
                         mods += mod;
                     }
                 }
-                change.modifications = mods;
                 break;
 
             case "modrdn":
@@ -305,20 +307,27 @@ public class LdifReader {
                     i++;
                     if (exists parsed) {
                         switch (parsed.name.lwr()) {
-                            case "newrdn": change.newrdn = string(parsed.value); break;
-                            case "deleteoldrdn": change.deleteoldrdn = boolean(parsed.value); break;
-                            case "newsuperior": change.newsuperior = string(parsed.value); break;
+                            case "newrdn": newrdn = string(parsed.value); break;
+                            case "deleteoldrdn": deleteoldrdn = boolean(parsed.value); break;
+                            case "newsuperior": newsuperior = string(parsed.value); break;
                         }
                     }
                 }
                 break;
 
             case "delete":
-                # no additional data needed
                 break;
         }
 
-        return change;
+        return <LdifChangeInfo>{
+            "dn": dn,
+            "changetype": changetype,
+            "attributes": changetype == "add" ? attrs : NOTHING,
+            "modifications": changetype == "modify" ? mods : NOTHING,
+            "newrdn": newrdn,
+            "deleteoldrdn": deleteoldrdn,
+            "newsuperior": newsuperior,
+        };
     }
 
     #! Parse a single LDIF line into name/value
