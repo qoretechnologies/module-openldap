@@ -14,13 +14,15 @@
 
     <b>Overview of Operations Supported by the LdapClient Class</b>
     |!Operation|!Method|!Description
-    |search|@ref OpenLdap::LdapClient::search() "LdapClient::search()"|Search for entries and attributes
+    |search|@ref OpenLdap::LdapClient::search() "LdapClient::search()"|Search for entries and attributes; supports paged results via \c "page-size" option
     |add|@ref OpenLdap::LdapClient::add() "LdapClient::add()"|Add entries to the Directory Information Tree
     |modify|@ref OpenLdap::LdapClient::modify() "LdapClient::modify()"|Modify existing entries
     |delete|@ref OpenLdap::LdapClient::del() "LdapClient::del()"|Delete existing Entries
     |compare|@ref OpenLdap::LdapClient::compare() "LdapClient::compare()"|Compare attribute values
     |rename|@ref OpenLdap::LdapClient::rename() "LdapClient::rename()"|Rename or move entries to another location in the Directory Information Tree
     |change password|@ref OpenLdap::LdapClient::passwd() "LdapClient::passwd()"|Changes the LDAP password for the given user
+    |SASL bind|@ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"|SASL bind with any mechanism (GSSAPI, DIGEST-MD5, EXTERNAL, etc.)
+    |extended operation|@ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()"|Perform generic LDAP extended operations (Who Am I?, Cancel, etc.)
 
     The underlying %LDAP functionality is provided by the <a href="http://www.openldap.org">openldap library</a>.
 
@@ -71,8 +73,10 @@ pool.release(ldap);
 
     - \c LdapEntry - Object-oriented wrapper for LDAP entries
     - \c LdapSearchIterator - Iterator for efficient result processing
-    - \c LdapDn - Distinguished Name parser and manipulator
-    - \c LdapClientHelper - Extended client with convenience methods
+    - \c LdapDn - RFC 4514-compliant Distinguished Name parser with escaping support
+    - \c LdapClientHelper - Extended client with convenience methods (including \c whoAmI())
+    - \c LdapUrl - RFC 4516 LDAP URL parser
+    - \c LdapSchema - LDAP schema introspection (objectClasses, attributeTypes)
 
     @code{.qore}
 %new-style
@@ -108,6 +112,71 @@ while (iter.next()) {
     LdapEntry e = iter.getValue();
     printf("Found: %s\n", e.dn);
 }
+    @endcode
+
+    @subsection openldap_async Asynchronous Operations
+
+    The \c LdapAsync module provides non-blocking LDAP operations using the Qore Future/Promise pattern:
+
+    @code{.qore}
+%modern
+%requires LdapAsync
+
+LdapAsyncClient async("ldap://localhost:389", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+});
+
+# fire off parallel searches
+LdapFuture f1 = async.searchAsync({"base": "ou=people,dc=example,dc=com", "filter": "(uid=user1)"});
+LdapFuture f2 = async.searchAsync({"base": "ou=groups,dc=example,dc=com", "filter": "(cn=admins)"});
+
+# collect results (blocks until each completes)
+hash<auto> users = f1.get(30s);
+hash<auto> groups = f2.get(30s);
+    @endcode
+
+    @subsection openldap_ldif LDIF Import/Export
+
+    The \c LdifHelper module provides LDIF (RFC 2849) reading and writing:
+
+    @code{.qore}
+%modern
+%requires LdifHelper
+
+# Read entries from an LDIF file
+LdifReader reader("/path/to/data.ldif");
+while (*hash<LdifEntryInfo> entry = reader.readEntry()) {
+    printf("DN: %s\n", entry.dn);
+}
+
+# Write entries to an LDIF file
+LdifWriter writer("/path/to/output.ldif");
+writer.writeEntry("dc=example,dc=com", {"objectClass": ("top", "domain"), "dc": "example"});
+    @endcode
+
+    @subsection openldap_ad Active Directory Compatibility
+
+    The \c LdapActiveDirectory module provides Active Directory-specific features:
+
+    @code{.qore}
+%modern
+%requires LdapActiveDirectory
+
+ActiveDirectoryClient ad("ldap://dc.example.com:389", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+});
+
+# Automatic paged search (handles AD's 1000-entry limit)
+hash<auto> results = ad.searchPaged({"base": "dc=example,dc=com", "filter": "(objectClass=user)"});
+
+# Range retrieval for large groups
+list<auto> members = ad.getRangedAttribute("cn=LargeGroup,dc=example,dc=com", "member");
+
+# Decode binary Active Directory attributes
+string guid = ActiveDirectoryClient::decodeObjectGUID(binary_guid_value);
+string sid = ActiveDirectoryClient::decodeObjectSid(binary_sid_value);
     @endcode
 
     @section openldap_examples Examples
@@ -226,16 +295,116 @@ ldap.passwd("uid=test,ou=people,dc=example,dc=com", "oldpassword", "newpassword"
     @endcode
     @see @ref OpenLdap::LdapClient::passwd() "LdapClient::passwd()"
 
+    @par SASL Bind (GSSAPI, DIGEST-MD5, EXTERNAL, etc.)
+    @code
+%modern
+%requires openldap
+LdapClient ldap("ldap://localhost");
+ldap.saslBind({
+    "mechanism": "DIGEST-MD5",
+    "authcid": "username",
+    "password": "secret",
+    "realm": "EXAMPLE.COM",
+});
+    @endcode
+    @see @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
+
+    @par Paged Search (for directories with size limits)
+    @code
+%modern
+%requires openldap
+LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
+# The page-size option automatically handles RFC 2696 paged results
+hash<auto> all_entries = ldap.search({
+    "base": "dc=example,dc=com",
+    "filter": "(objectClass=person)",
+    "page-size": 500,
+});
+    @endcode
+
+    @par Using Server Controls
+    @code
+%modern
+%requires openldap
+LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
+# Pass server controls with any operation
+hash<auto> result = ldap.search({
+    "base": "dc=example,dc=com",
+    "filter": "(objectClass=*)",
+}, NOTHING, ({
+    "oid": LDAP_CONTROL_MANAGEDSAIT,
+    "critical": True,
+},));
+    @endcode
+
+    @par Extended Operations (Who Am I?)
+    @code
+%modern
+%requires openldap
+LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
+hash<auto> result = ldap.extendedOp(LDAP_EXOP_WHO_AM_I);
+if (exists result.value) {
+    printf("Bound as: %s\n", result.value.toString("UTF-8"));
+}
+    @endcode
+    @see @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()"
+
+    @par Binary Attribute Handling
+    @code
+%modern
+%requires openldap
+# Known binary attributes (jpegPhoto, userCertificate, etc.) are automatically
+# returned as binary type. Additional binary attributes can be specified:
+LdapClient ldap("ldap://localhost", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+    "binary-attributes": ("customBinaryAttr",),
+});
+# Per-search override:
+hash<auto> result = ldap.search({
+    "base": "dc=example,dc=com",
+    "filter": "(uid=test)",
+    "binary-attributes": ("thumbnailPhoto",),
+});
+    @endcode
+
     @section openldap_limitations Limitations
 
     This module currently has the following limitations:
-    - supports only simple SASL binds
-    - extended operations are not supported
-    - server and client controls are not supported
     - LDAP transactions are not supported
-    - paged results (RFC 2696) are not supported at the C++ level (use the search iterator for memory-efficient processing)
 
     @section openldap_release_notes Release Notes
+
+    @subsection openldap_rel20 openldap Module 2.0
+
+    <b>New Features:</b>
+    - added server and client controls support on all LDAP operations; see @ref ldap_control_constants
+    - added SASL authentication with any mechanism (GSSAPI, DIGEST-MD5, EXTERNAL, SCRAM, etc.) via
+      @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
+    - added paged results (RFC 2696) via the \c "page-size" search option; handles Active Directory's
+      1000-entry limit transparently
+    - added generic extended operations via @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()";
+      see @ref ldap_extop_constants for common OIDs
+    - added binary attribute support with built-in known-binary attribute list and opt-in via
+      \c "binary-attributes" and \c "all-binary" options
+    - added RFC 4514-compliant DN parsing with escaped character support, multi-valued RDNs,
+      and \c escape() / \c unescape() static methods
+    - added \c LdapAsync module with \c LdapFuture and \c LdapAsyncClient for non-blocking parallel
+      LDAP operations using the Qore Future/Promise pattern
+    - added \c LdifHelper module with \c LdifReader and \c LdifWriter for LDIF (RFC 2849) import/export
+    - added \c LdapActiveDirectory module with \c ActiveDirectoryClient for AD-specific features:
+      auto-paged search, range retrieval, objectGUID/objectSid decoding, deleted object search
+    - added \c LdapSchema class for LDAP schema introspection (objectClasses, attributeTypes)
+    - added \c LdapUrl class for RFC 4516 LDAP URL parsing
+    - added \c whoAmI() convenience method to \c LdapClientHelper
+    - added connection pool health checks, automatic reconnection, and \c withConnectionRetry() with
+      configurable retry policy
+    - added 14 LDAP control OID constants and 5 extended operation OID constants
+
+    <b>Bug Fixes:</b>
+    - <b>critical fix</b>: fixed \c copy() constructor not re-binding to the LDAP server because the
+      bind parameters hash was never saved after a successful bind
+    - updated copyright to 2026
 
     @subsection openldap_rel13 openldap Module 1.3
     - added support for interruptible I/O for graceful termination of sandboxed programs; interrupt

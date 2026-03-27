@@ -31,6 +31,8 @@
 #include <string.h>
 
 #include <memory>
+#include <set>
+#include <vector>
 
 // default ldap operation timeout in milliseconds
 #define QORE_LDAP_DEFAULT_TIMEOUT_MS 60000
@@ -426,6 +428,185 @@ struct TimeoutHelper : public timeval {
     }
 };
 
+// RAII helper to convert a Qore list of LdapControlInfo hashes to an LDAPControl** array
+class LdapControlListHelper {
+protected:
+    std::vector<LDAPControl*> ctrls;
+
+public:
+    DLLLOCAL LdapControlListHelper() {
+    }
+
+    DLLLOCAL LdapControlListHelper(const QoreListNode* l, ExceptionSink* xsink) {
+        if (!l || l->empty()) {
+            return;
+        }
+
+        ConstListIterator li(l);
+        while (li.next()) {
+            QoreValue v = li.getValue();
+            if (v.getType() != NT_HASH) {
+                xsink->raiseException("LDAP-CONTROL-ERROR",
+                    "control list element %zd/%zd is type '%s'; expecting 'hash'",
+                    li.index(), li.max(), v.getTypeName());
+                return;
+            }
+            const QoreHashNode* ch = v.get<const QoreHashNode>();
+
+            // get OID (required)
+            const QoreStringNode* oid = check_hash_key<QoreStringNode>(xsink, *ch, "oid",
+                "LDAP-CONTROL-ERROR", "LDAP control hash");
+            if (!oid) {
+                return;
+            }
+
+            // get criticality (optional, default false)
+            bool critical = ch->getKeyValue("critical").getAsBool();
+
+            // get value (optional binary data)
+            QoreValue val_node = ch->getKeyValue("value");
+            struct berval bv = {0, 0};
+            struct berval* bvp = nullptr;
+            if (!val_node.isNullOrNothing()) {
+                if (val_node.getType() == NT_BINARY) {
+                    const BinaryNode* bn = val_node.get<const BinaryNode>();
+                    bv.bv_val = (char*)bn->getPtr();
+                    bv.bv_len = bn->size();
+                    bvp = &bv;
+                } else if (val_node.getType() == NT_STRING) {
+                    const QoreStringNode* sn = val_node.get<const QoreStringNode>();
+                    bv.bv_val = (char*)sn->c_str();
+                    bv.bv_len = sn->size();
+                    bvp = &bv;
+                } else {
+                    xsink->raiseException("LDAP-CONTROL-ERROR",
+                        "control 'value' key is type '%s'; expecting 'binary' or 'string'",
+                        val_node.getTypeName());
+                    return;
+                }
+            }
+
+            LDAPControl* ctrl = nullptr;
+            int rc = ldap_control_create(oid->c_str(), critical ? 1 : 0, bvp, 0, &ctrl);
+            if (rc != LDAP_SUCCESS || !ctrl) {
+                xsink->raiseException("LDAP-CONTROL-ERROR",
+                    "failed to create LDAP control with OID '%s': %s",
+                    oid->c_str(), ldap_err2string(rc));
+                return;
+            }
+            ctrls.push_back(ctrl);
+        }
+    }
+
+    DLLLOCAL ~LdapControlListHelper() {
+        for (auto* ctrl : ctrls) {
+            ldap_control_free(ctrl);
+        }
+    }
+
+    // Returns NULL-terminated LDAPControl** array, or nullptr if empty
+    DLLLOCAL LDAPControl** getControls() {
+        if (ctrls.empty()) {
+            return nullptr;
+        }
+        // ensure NULL terminator
+        if (ctrls.back() != nullptr) {
+            ctrls.push_back(nullptr);
+        }
+        return ctrls.data();
+    }
+
+    DLLLOCAL operator LDAPControl**() {
+        return getControls();
+    }
+
+    DLLLOCAL bool empty() const {
+        return ctrls.empty();
+    }
+};
+
+// Helper to extract response controls from an LDAP result message and convert to Qore data
+class LdapResponseControlHelper {
+public:
+    DLLLOCAL static QoreListNode* getResponseControls(LDAP* ldp, LDAPMessage* res, ExceptionSink* xsink) {
+        LDAPControl** resp_ctrls = nullptr;
+        int rc = ldap_parse_result(ldp, res, nullptr, nullptr, nullptr, nullptr, &resp_ctrls, 0);
+        if (rc != LDAP_SUCCESS || !resp_ctrls) {
+            return nullptr;
+        }
+
+        ReferenceHolder<QoreListNode> result(new QoreListNode(autoTypeInfo), xsink);
+
+        for (int i = 0; resp_ctrls[i]; ++i) {
+            LDAPControl* ctrl = resp_ctrls[i];
+            ReferenceHolder<QoreHashNode> ch(new QoreHashNode(autoTypeInfo), xsink);
+            ch->setKeyValue("oid", new QoreStringNode(ctrl->ldctl_oid), xsink);
+            ch->setKeyValue("critical", ctrl->ldctl_iscritical ? true : false, xsink);
+            if (ctrl->ldctl_value.bv_len > 0) {
+                BinaryNode* bn = new BinaryNode;
+                bn->append(ctrl->ldctl_value.bv_val, ctrl->ldctl_value.bv_len);
+                ch->setKeyValue("value", bn, xsink);
+            }
+            result->push(ch.release(), xsink);
+        }
+
+        ldap_controls_free(resp_ctrls);
+        return result->empty() ? nullptr : result.release();
+    }
+};
+
+// Data structure for SASL interactive bind callback
+struct QoreSaslInteractData {
+    const char* authcid;   // authentication identity
+    const char* authzid;   // authorization identity
+    const char* realm;     // SASL realm
+    const char* password;  // password/credentials
+};
+
+// SASL interaction callback for ldap_sasl_interactive_bind_s()
+static int qore_sasl_interact_cb(LDAP* ld, unsigned flags, void* defaults, void* interact) {
+    sasl_interact_t* in = (sasl_interact_t*)interact;
+    QoreSaslInteractData* data = (QoreSaslInteractData*)defaults;
+    for (; in->id != SASL_CB_LIST_END; ++in) {
+        in->result = nullptr;
+        in->len = 0;
+        switch (in->id) {
+            case SASL_CB_AUTHNAME:
+                if (data->authcid) {
+                    in->result = data->authcid;
+                    in->len = strlen(data->authcid);
+                }
+                break;
+            case SASL_CB_USER:
+                if (data->authzid) {
+                    in->result = data->authzid;
+                    in->len = strlen(data->authzid);
+                }
+                break;
+            case SASL_CB_PASS:
+                if (data->password) {
+                    in->result = data->password;
+                    in->len = strlen(data->password);
+                }
+                break;
+            case SASL_CB_GETREALM:
+                if (data->realm) {
+                    in->result = data->realm;
+                    in->len = strlen(data->realm);
+                }
+                break;
+            default:
+                // use default if available
+                if (in->defresult) {
+                    in->result = in->defresult;
+                    in->len = strlen(in->defresult);
+                }
+                break;
+        }
+    }
+    return LDAP_SUCCESS;
+}
+
 class QoreStringBervalHelper : public berval, public QoreStringValueHelper {
 public:
     DLLLOCAL QoreStringBervalHelper(const AbstractQoreNode* n, ExceptionSink* xsink) : QoreStringValueHelper(n, QCS_UTF8, xsink) {
@@ -494,7 +675,18 @@ protected:
     int timeout_ms;
     // boolean flags
     bool tls : 1,        // issue a STARTTLS command if the session is not already secure
-        no_referrals : 1; // do not follow referrals
+        no_referrals : 1, // do not follow referrals
+        all_binary : 1;  // return all attribute values as binary
+
+public:
+    // set of attribute names that should be returned as binary
+    typedef std::set<std::string> strset_t;
+
+protected:
+    strset_t binary_attrs;
+
+    // built-in list of known binary attributes
+    static const strset_t default_binary_attrs;
 
     QoreStringNode* getErrorText(const char* meth, const char* f, int ec) const {
         QoreStringNode* desc = new QoreStringNode("ldap server ");
@@ -507,6 +699,25 @@ protected:
 
     void doLdapError(const char* meth, const char* f, int ec, ExceptionSink* xsink) const {
         xsink->raiseException("LDAP-ERROR", getErrorText(meth, f, ec));
+    }
+
+    // Check if an attribute should be returned as binary
+    DLLLOCAL bool isBinaryAttribute(const char* attr, const strset_t* search_binary = nullptr) const {
+        if (all_binary) {
+            return true;
+        }
+        std::string attr_lc(attr);
+        // case-insensitive comparison: convert to lowercase
+        for (auto& c : attr_lc) {
+            c = tolower(c);
+        }
+        if (search_binary && search_binary->count(attr_lc)) {
+            return true;
+        }
+        if (binary_attrs.count(attr_lc)) {
+            return true;
+        }
+        return default_binary_attrs.count(attr_lc) > 0;
     }
 
     int checkLdapError(const char* meth, const char* f, int ec, ExceptionSink* xsink) const {
@@ -626,27 +837,32 @@ protected:
 
         const QoreStringNode* binddn = check_hash_key<QoreStringNode>(xsink, bindh, "binddn", "LDAP-BIND-ERROR");
         if (!binddn) {
-            if (password && !password->empty())
+            if (password && !password->empty()) {
                 xsink->raiseException("LDAP-BIND-ERROR", "password given but no bind DN given for bind");
+            }
             return -1;
         }
 
         QoreStringValueHelper bstr(binddn, QCS_UTF8, xsink);
-        if (*xsink)
+        if (*xsink) {
             return -1;
+        }
 
         QoreStringBervalHelper passwd(password, xsink);
-        if (*xsink)
+        if (*xsink) {
             return -1;
+        }
 
         // Check for interrupt before bind
-        if (qore_check_cancel(xsink))
+        if (qore_check_cancel(xsink)) {
             return -1;
+        }
 
         int msgid;
 
-        if (checkLdapError(m, "ldap_sasl_bind", ldap_sasl_bind(ldp, bstr->getBuffer(), LDAP_SASL_SIMPLE, &passwd, 0, 0, &msgid), xsink))
+        if (checkLdapError(m, "ldap_sasl_bind", ldap_sasl_bind(ldp, bstr->getBuffer(), LDAP_SASL_SIMPLE, &passwd, 0, 0, &msgid), xsink)) {
             return -1;
+        }
 
         LDAPMessage* result = 0;
         TimeoutHelper timeout(my_timeout_ms);
@@ -656,24 +872,30 @@ protected:
             return -1;
         }
 
-        return checkFreeResult(m, "ldap_sasl_bind", result, xsink);
+        int rc = checkFreeResult(m, "ldap_sasl_bind", result, xsink);
+        if (!rc) {
+            // save bind parameters for copy constructor
+            if (bh) {
+                bh->deref(xsink);
+            }
+            bh = bindh.hashRefSelf();
+        }
+        return rc;
     }
 
 public:
-    DLLLOCAL QoreLdapClient(const QoreStringNode* uristr, const QoreHashNode* opth, ExceptionSink* xsink) : ldp(0), uri(0), bh(0), prot(QORE_LDAP_DEFAULT_PROTOCOL), timeout_ms(QORE_LDAP_DEFAULT_TIMEOUT_MS), tls(false), no_referrals(false) {
-        //printd(5, "QoreLdapClient::QoreLdapClient() this: %p uri: '%s' opth: %p\n", this, uristr->getBuffer(), opth);
-
+    DLLLOCAL QoreLdapClient(const QoreStringNode* uristr, const QoreHashNode* opth, ExceptionSink* xsink) : ldp(0), uri(0), bh(0), prot(QORE_LDAP_DEFAULT_PROTOCOL), timeout_ms(QORE_LDAP_DEFAULT_TIMEOUT_MS), tls(false), no_referrals(false), all_binary(false) {
         if (opth) {
             QoreValue p = opth->getKeyValue("protocol");
             int i = p.getAsBigInt();
-            if (i)
+            if (i) {
                 prot = i;
+            }
 
             i = getMsZeroInt(opth->getKeyValue("timeout"));
-            if (i)
+            if (i) {
                 timeout_ms = i;
-
-            //printd(0, "QoreLdapClient::QoreLdapClient() set default timeout to %d ms\n", timeout_ms);
+            }
 
             p = opth->getKeyValue("no-referrals");
             bool refp = p.getAsBool();
@@ -682,6 +904,27 @@ public:
 
             p = opth->getKeyValue("starttls");
             tls = p.getAsBool();
+
+            // binary attribute options
+            p = opth->getKeyValue("all-binary");
+            all_binary = p.getAsBool();
+
+            QoreValue ba = opth->getKeyValue("binary-attributes");
+            if (!ba.isNullOrNothing() && ba.getType() == NT_LIST) {
+                const QoreListNode* bal = ba.get<const QoreListNode>();
+                ConstListIterator li(bal);
+                while (li.next()) {
+                    QoreStringValueHelper str(li.getValue(), QCS_UTF8, xsink);
+                    if (*xsink) {
+                        return;
+                    }
+                    std::string s(str->c_str());
+                    for (auto& c : s) {
+                        c = tolower(c);
+                    }
+                    binary_attrs.insert(std::move(s));
+                }
+            }
         }
 
         if (initIntern(xsink, "constructor", *uristr))
@@ -694,7 +937,7 @@ public:
         }
     }
 
-    DLLLOCAL QoreLdapClient(const QoreLdapClient& old, ExceptionSink* xsink) : ldp(0), uri(0), bh(0), prot(old.prot), timeout_ms(old.timeout_ms), tls(old.tls), no_referrals(old.no_referrals) {
+    DLLLOCAL QoreLdapClient(const QoreLdapClient& old, ExceptionSink* xsink) : ldp(0), uri(0), bh(0), prot(old.prot), timeout_ms(old.timeout_ms), tls(old.tls), no_referrals(old.no_referrals), all_binary(old.all_binary), binary_attrs(old.binary_attrs) {
         AutoLocker al(old.m);
         if (old.checkValidIntern("copy", xsink))
             return;
@@ -751,7 +994,107 @@ public:
         return bindInitIntern(xsink, "bind", bindh, my_timeout_ms);
     }
 
-    DLLLOCAL QoreHashNode* search(ExceptionSink* xsink, const QoreStringNode* base, int scope, const QoreStringNode* filter, const QoreListNode* attrl = 0, bool attrsonly = false, int my_timeout_ms = 0) {
+    DLLLOCAL int saslBind(ExceptionSink* xsink, const QoreHashNode& opts, int my_timeout_ms = 0) {
+        // extract mechanism (required)
+        const QoreStringNode* mechanism = check_hash_key<QoreStringNode>(xsink, opts, "mechanism", "LDAP-SASL-BIND-ERROR", "SASL bind options");
+        if (!mechanism) {
+            return -1;
+        }
+        QoreStringValueHelper mechstr(mechanism, QCS_UTF8, xsink);
+        if (*xsink) {
+            return -1;
+        }
+
+        // extract optional parameters
+        const QoreStringNode* authcid_node = check_hash_key<QoreStringNode>(xsink, opts, "authcid", "LDAP-SASL-BIND-ERROR");
+        if (*xsink) {
+            return -1;
+        }
+        const QoreStringNode* authzid_node = check_hash_key<QoreStringNode>(xsink, opts, "authzid", "LDAP-SASL-BIND-ERROR");
+        if (*xsink) {
+            return -1;
+        }
+        const QoreStringNode* realm_node = check_hash_key<QoreStringNode>(xsink, opts, "realm", "LDAP-SASL-BIND-ERROR");
+        if (*xsink) {
+            return -1;
+        }
+        const QoreStringNode* password_node = check_hash_key<QoreStringNode>(xsink, opts, "password", "LDAP-SASL-BIND-ERROR");
+        if (*xsink) {
+            return -1;
+        }
+
+        // convert optional strings to UTF-8 (stack-allocated)
+        QoreString authcid_buf, authzid_buf, realm_buf, password_buf;
+        if (authcid_node) {
+            QoreStringValueHelper tmp(authcid_node, QCS_UTF8, xsink);
+            if (*xsink) {
+                return -1;
+            }
+            authcid_buf = **tmp;
+        }
+        if (authzid_node) {
+            QoreStringValueHelper tmp(authzid_node, QCS_UTF8, xsink);
+            if (*xsink) {
+                return -1;
+            }
+            authzid_buf = **tmp;
+        }
+        if (realm_node) {
+            QoreStringValueHelper tmp(realm_node, QCS_UTF8, xsink);
+            if (*xsink) {
+                return -1;
+            }
+            realm_buf = **tmp;
+        }
+        if (password_node) {
+            QoreStringValueHelper tmp(password_node, QCS_UTF8, xsink);
+            if (*xsink) {
+                return -1;
+            }
+            password_buf = **tmp;
+        }
+
+        // set up interaction data
+        QoreSaslInteractData interact_data;
+        interact_data.authcid = authcid_node ? authcid_buf.c_str() : nullptr;
+        interact_data.authzid = authzid_node ? authzid_buf.c_str() : nullptr;
+        interact_data.realm = realm_node ? realm_buf.c_str() : nullptr;
+        interact_data.password = password_node ? password_buf.c_str() : nullptr;
+
+        AutoLocker al(m);
+        if (checkValidIntern("saslBind", xsink)) {
+            return -1;
+        }
+
+        // Check for interrupt before SASL bind
+        if (qore_check_cancel(xsink)) {
+            return -1;
+        }
+
+        // set timeout on connection before calling the synchronous SASL bind
+        if (my_timeout_ms) {
+            TimeoutHelper timeout(my_timeout_ms);
+            ldap_set_option(ldp, LDAP_OPT_TIMEOUT, &timeout);
+        }
+
+        int rc = ldap_sasl_interactive_bind_s(ldp, nullptr, mechstr->c_str(),
+            nullptr, nullptr, LDAP_SASL_QUIET, qore_sasl_interact_cb, &interact_data);
+
+        // restore default timeout
+        if (my_timeout_ms) {
+            TimeoutHelper timeout(timeout_ms);
+            ldap_set_option(ldp, LDAP_OPT_TIMEOUT, &timeout);
+        }
+
+        if (rc != LDAP_SUCCESS) {
+            doLdapError("saslBind", "ldap_sasl_interactive_bind_s", rc, xsink);
+            return -1;
+        }
+
+        return 0;
+    }
+
+    DLLLOCAL QoreHashNode* search(ExceptionSink* xsink, const QoreStringNode* base, int scope, const QoreStringNode* filter, const QoreListNode* attrl = 0, bool attrsonly = false, int my_timeout_ms = 0, const QoreListNode* server_controls = nullptr, const strset_t* search_binary = nullptr) {
         // convert strings to UTF-8 if necessary
         QoreStringValueHelper bstr(base, QCS_UTF8, xsink);
         if (*xsink)
@@ -766,6 +1109,11 @@ public:
         if (*xsink)
             return 0;
 
+        // build server controls array
+        LdapControlListHelper sctrls(server_controls, xsink);
+        if (*xsink)
+            return 0;
+
         AutoLocker al(m);
         if (checkValidIntern("search", xsink))
             return 0;
@@ -775,7 +1123,7 @@ public:
             return 0;
 
         int msgid;
-        if (checkLdapError("search", "ldap_search_ext", ldap_search_ext(ldp, bstr->empty() ? 0 : bstr->getBuffer(), scope, fstr->empty() ? 0 : fstr->getBuffer(), *attrs, (int)attrsonly, 0, 0, 0, 0, &msgid), xsink))
+        if (checkLdapError("search", "ldap_search_ext", ldap_search_ext(ldp, bstr->empty() ? 0 : bstr->getBuffer(), scope, fstr->empty() ? 0 : fstr->getBuffer(), *attrs, (int)attrsonly, sctrls, 0, 0, 0, &msgid), xsink))
             return 0;
 
         LDAPMessage* res = 0;
@@ -796,35 +1144,33 @@ public:
         for (int i = 0; e; ++i, e = ldap_next_entry(ldp, e)) {
             ReferenceHolder<QoreHashNode> he(new QoreHashNode, xsink);
 
-            /*
-            for (LDAPMessage* msg = ldap_first_message(ldp, e); msg; msg = ldap_next_message(ldp, msg)) {
-                printd(0, "LdapClient::search() message type: %d entries: %d\n", ldap_msgtype(msg), ldap_count_entries(ldp, msg));
-                if (ldap_msgtype(msg) == LDAP_RES_SEARCH_RESULT) {
-                }
-            }
-            */
-
             BerElement* ber;
             char* attr = ldap_first_attribute(ldp, e, &ber);
             for (; attr; attr = ldap_next_attribute(ldp, e, ber)) {
                 struct berval** vals;
-                //printd(5, "LdapClient::search() attribute: %s\n", attr);
 
                 ReferenceHolder<> aval(xsink);
                 QoreListNode* al = 0;
                 if ((vals = ldap_get_values_len(ldp, e, attr))) {
+                    bool is_binary = isBinaryAttribute(attr, search_binary);
                     for (unsigned i = 0; vals[i]; ++i) {
-                        //printd(5, "LdapClient::search (%ld) %s\n", vals[i]->bv_len, vals[i]->bv_val );
-                        QoreStringNode *avstr = new QoreStringNode(vals[i]->bv_val, vals[i]->bv_len, QCS_UTF8);
-                        if (!i)
-                            aval = avstr;
-                        else {
+                        AbstractQoreNode* val_node;
+                        if (is_binary) {
+                            BinaryNode* bn = new BinaryNode;
+                            bn->append(vals[i]->bv_val, vals[i]->bv_len);
+                            val_node = bn;
+                        } else {
+                            val_node = new QoreStringNode(vals[i]->bv_val, vals[i]->bv_len, QCS_UTF8);
+                        }
+                        if (!i) {
+                            aval = val_node;
+                        } else {
                             if (i == 1) {
                                 al = new QoreListNode(autoTypeInfo);
                                 al->push(aval.release(), xsink);
                                 aval = al;
                             }
-                            al->push(avstr, xsink);
+                            al->push(val_node, xsink);
                         }
                     }
 
@@ -834,8 +1180,9 @@ public:
                 he->setKeyValue(attr, aval.release(), 0);
                 ldap_memfree(attr);
             }
-            if (ber)
+            if (ber) {
                 ber_free(ber, 0);
+            }
 
             char* p = ldap_get_dn(ldp, e);
             if (p) {
@@ -851,13 +1198,202 @@ public:
         return h.release();
     }
 
-    DLLLOCAL int add(ExceptionSink* xsink, const QoreStringNode* dn, const QoreHashNode* attr, int my_timeout_ms = 0) {
+    // Helper: extract entries from an LDAP result message and append to hash h
+    DLLLOCAL void extractSearchEntries(QoreHashNode* h, LDAPMessage* res, int& entry_index, ExceptionSink* xsink, const strset_t* search_binary = nullptr) {
+        LDAPMessage* e = ldap_first_entry(ldp, res);
+        for (; e; e = ldap_next_entry(ldp, e), ++entry_index) {
+            ReferenceHolder<QoreHashNode> he(new QoreHashNode, xsink);
+
+            BerElement* ber;
+            char* attr = ldap_first_attribute(ldp, e, &ber);
+            for (; attr; attr = ldap_next_attribute(ldp, e, ber)) {
+                struct berval** vals;
+                ReferenceHolder<> aval(xsink);
+                QoreListNode* al = 0;
+                if ((vals = ldap_get_values_len(ldp, e, attr))) {
+                    bool is_binary = isBinaryAttribute(attr, search_binary);
+                    for (unsigned j = 0; vals[j]; ++j) {
+                        AbstractQoreNode* val_node;
+                        if (is_binary) {
+                            BinaryNode* bn = new BinaryNode;
+                            bn->append(vals[j]->bv_val, vals[j]->bv_len);
+                            val_node = bn;
+                        } else {
+                            val_node = new QoreStringNode(vals[j]->bv_val, vals[j]->bv_len, QCS_UTF8);
+                        }
+                        if (!j) {
+                            aval = val_node;
+                        } else {
+                            if (j == 1) {
+                                al = new QoreListNode(autoTypeInfo);
+                                al->push(aval.release(), xsink);
+                                aval = al;
+                            }
+                            al->push(val_node, xsink);
+                        }
+                    }
+                    ber_bvecfree(vals);
+                }
+                he->setKeyValue(attr, aval.release(), 0);
+                ldap_memfree(attr);
+            }
+            if (ber) {
+                ber_free(ber, 0);
+            }
+
+            char* p = ldap_get_dn(ldp, e);
+            if (p) {
+                h->setKeyValue(p, he.release(), 0);
+                ldap_memfree(p);
+            } else {
+                QoreStringMaker key("<entry-%d>", entry_index);
+                h->setKeyValue(key.c_str(), he.release(), 0);
+            }
+        }
+    }
+
+    DLLLOCAL QoreHashNode* searchPaged(ExceptionSink* xsink, const QoreStringNode* base, int scope, const QoreStringNode* filter, const QoreListNode* attrl = 0, bool attrsonly = false, int page_size = 500, int my_timeout_ms = 0, const QoreListNode* extra_controls = nullptr, const strset_t* search_binary = nullptr) {
+        // convert strings to UTF-8 if necessary
+        QoreStringValueHelper bstr(base, QCS_UTF8, xsink);
+        if (*xsink) {
+            return nullptr;
+        }
+        QoreStringValueHelper fstr(filter, QCS_UTF8, xsink);
+        if (*xsink) {
+            return nullptr;
+        }
+        AttrListHelper attrs(attrl, xsink);
+        if (*xsink) {
+            return nullptr;
+        }
+        // build extra server controls
+        LdapControlListHelper extra_sctrls(extra_controls, xsink);
+        if (*xsink) {
+            return nullptr;
+        }
+
+        AutoLocker al(m);
+        if (checkValidIntern("search", xsink)) {
+            return nullptr;
+        }
+        if (qore_check_cancel(xsink)) {
+            return nullptr;
+        }
+
+        ReferenceHolder<QoreHashNode> h(new QoreHashNode, xsink);
+        int entry_index = 0;
+        struct berval cookie = {0, nullptr};
+
+        do {
+            // check for cancellation between pages
+            if (qore_check_cancel(xsink)) {
+                if (cookie.bv_val) {
+                    ber_memfree(cookie.bv_val);
+                }
+                return nullptr;
+            }
+
+            // create paged results control
+            LDAPControl* page_ctrl = nullptr;
+            int rc = ldap_create_page_control(ldp, page_size, &cookie, 0, &page_ctrl);
+            if (rc != LDAP_SUCCESS) {
+                if (cookie.bv_val) {
+                    ber_memfree(cookie.bv_val);
+                }
+                doLdapError("search", "ldap_create_page_control", rc, xsink);
+                return nullptr;
+            }
+
+            // build combined controls array: paged control + any extra controls
+            std::vector<LDAPControl*> ctrl_array;
+            ctrl_array.push_back(page_ctrl);
+            LDAPControl** extra = extra_sctrls.getControls();
+            if (extra) {
+                for (int i = 0; extra[i]; ++i) {
+                    ctrl_array.push_back(extra[i]);
+                }
+            }
+            ctrl_array.push_back(nullptr);
+
+            int msgid;
+            rc = ldap_search_ext(ldp,
+                bstr->empty() ? nullptr : bstr->getBuffer(),
+                scope,
+                fstr->empty() ? nullptr : fstr->getBuffer(),
+                *attrs, (int)attrsonly,
+                ctrl_array.data(), nullptr, nullptr, 0, &msgid);
+
+            ldap_control_free(page_ctrl);
+
+            if (rc != LDAP_SUCCESS) {
+                if (cookie.bv_val) {
+                    ber_memfree(cookie.bv_val);
+                }
+                doLdapError("search", "ldap_search_ext", rc, xsink);
+                return nullptr;
+            }
+
+            LDAPMessage* res = nullptr;
+            TimeoutHelper timeout(my_timeout_ms);
+            rc = ldap_result(ldp, msgid, LDAP_MSG_ALL, my_timeout_ms ? &timeout : nullptr, &res);
+            if (!rc || rc == -1) {
+                if (cookie.bv_val) {
+                    ber_memfree(cookie.bv_val);
+                }
+                if (res) {
+                    ldap_msgfree(res);
+                }
+                doLdapError("search", "ldap_search_ext", rc == 0 ? LDAP_TIMEOUT : rc, xsink);
+                return nullptr;
+            }
+
+            // extract entries from this page
+            extractSearchEntries(*h, res, entry_index, xsink, search_binary);
+
+            // free old cookie
+            if (cookie.bv_val) {
+                ber_memfree(cookie.bv_val);
+                cookie.bv_val = nullptr;
+                cookie.bv_len = 0;
+            }
+
+            // parse response controls to get new cookie
+            LDAPControl** resp_ctrls = nullptr;
+            ldap_parse_result(ldp, res, nullptr, nullptr, nullptr, nullptr, &resp_ctrls, 0);
+            if (resp_ctrls) {
+                for (int i = 0; resp_ctrls[i]; ++i) {
+                    if (!strcmp(resp_ctrls[i]->ldctl_oid, LDAP_CONTROL_PAGEDRESULTS)) {
+                        ber_int_t total_count = 0;
+                        ldap_parse_pageresponse_control(ldp, resp_ctrls[i], &total_count, &cookie);
+                        break;
+                    }
+                }
+                ldap_controls_free(resp_ctrls);
+            }
+
+            ldap_msgfree(res);
+
+        } while (cookie.bv_val && cookie.bv_len > 0);
+
+        if (cookie.bv_val) {
+            ber_memfree(cookie.bv_val);
+        }
+
+        return h.release();
+    }
+
+    DLLLOCAL int add(ExceptionSink* xsink, const QoreStringNode* dn, const QoreHashNode* attr, int my_timeout_ms = 0, const QoreListNode* server_controls = nullptr) {
         // convert strings to UTF-8 if necessary
         QoreStringValueHelper dnstr(dn, QCS_UTF8, xsink);
         if (*xsink)
             return -1;
 
         ModListHelper mods(xsink, attr);
+        if (*xsink)
+            return -1;
+
+        // build server controls array
+        LdapControlListHelper sctrls(server_controls, xsink);
         if (*xsink)
             return -1;
 
@@ -870,7 +1406,7 @@ public:
             return -1;
 
         int msgid;
-        if (checkLdapError("add", "ldap_add_ext", ldap_add_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), (LDAPMod**)*mods, 0, 0, &msgid), xsink))
+        if (checkLdapError("add", "ldap_add_ext", ldap_add_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), (LDAPMod**)*mods, sctrls, 0, &msgid), xsink))
             return -1;
 
         LDAPMessage* res = 0;
@@ -884,13 +1420,18 @@ public:
         return checkFreeResult("add", "ldap_add_ext", res, xsink);
     }
 
-    DLLLOCAL int modify(ExceptionSink* xsink, const QoreStringNode* dn, const QoreListNode* ml, int my_timeout_ms = 0) {
+    DLLLOCAL int modify(ExceptionSink* xsink, const QoreStringNode* dn, const QoreListNode* ml, int my_timeout_ms = 0, const QoreListNode* server_controls = nullptr) {
         // convert strings to UTF-8 if necessary
         QoreStringValueHelper dnstr(dn, QCS_UTF8, xsink);
         if (*xsink)
             return -1;
 
         ModListHelper mods(xsink, ml);
+        if (*xsink)
+            return -1;
+
+        // build server controls array
+        LdapControlListHelper sctrls(server_controls, xsink);
         if (*xsink)
             return -1;
 
@@ -903,7 +1444,7 @@ public:
             return -1;
 
         int msgid;
-        if (checkLdapError("modify", "ldap_modify_ext", ldap_modify_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), (LDAPMod**)*mods, 0, 0, &msgid), xsink))
+        if (checkLdapError("modify", "ldap_modify_ext", ldap_modify_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), (LDAPMod**)*mods, sctrls, 0, &msgid), xsink))
             return -1;
 
         LDAPMessage* res = 0;
@@ -917,9 +1458,14 @@ public:
         return checkFreeResult("modify", "ldap_modify_ext", res, xsink);
     }
 
-    DLLLOCAL int del(ExceptionSink* xsink, const QoreStringNode* dn, int my_timeout_ms = 0) {
+    DLLLOCAL int del(ExceptionSink* xsink, const QoreStringNode* dn, int my_timeout_ms = 0, const QoreListNode* server_controls = nullptr) {
         // convert strings to UTF-8 if necessary
         QoreStringValueHelper dnstr(dn, QCS_UTF8, xsink);
+        if (*xsink)
+            return -1;
+
+        // build server controls array
+        LdapControlListHelper sctrls(server_controls, xsink);
         if (*xsink)
             return -1;
 
@@ -932,7 +1478,7 @@ public:
             return -1;
 
         int msgid;
-        if (checkLdapError("del", "ldap_delete_ext", ldap_delete_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), 0, 0, &msgid), xsink))
+        if (checkLdapError("del", "ldap_delete_ext", ldap_delete_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), sctrls, 0, &msgid), xsink))
             return -1;
 
         LDAPMessage* res = 0;
@@ -946,7 +1492,7 @@ public:
         return checkFreeResult("del", "ldap_delete_ext", res, xsink);
     }
 
-    DLLLOCAL bool compare(ExceptionSink* xsink, const QoreStringNode* dn, const QoreStringNode* attr, const QoreListNode* vl, int my_timeout_ms = 0) {
+    DLLLOCAL bool compare(ExceptionSink* xsink, const QoreStringNode* dn, const QoreStringNode* attr, const QoreListNode* vl, int my_timeout_ms = 0, const QoreListNode* server_controls = nullptr) {
         // convert strings to UTF-8 if necessary
         QoreStringValueHelper dnstr(dn, QCS_UTF8, xsink);
         if (*xsink)
@@ -960,6 +1506,11 @@ public:
         if (*xsink)
             return false;
 
+        // build server controls array
+        LdapControlListHelper sctrls(server_controls, xsink);
+        if (*xsink)
+            return false;
+
         AutoLocker al(m);
         if (checkValidIntern("compare", xsink))
             return false;
@@ -969,7 +1520,7 @@ public:
             return false;
 
         int msgid;
-        if (checkLdapError("compare", "ldap_compare_ext", ldap_compare_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), attrstr->empty() ? 0 : attrstr->getBuffer(), **bval, 0, 0, &msgid), xsink))
+        if (checkLdapError("compare", "ldap_compare_ext", ldap_compare_ext(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), attrstr->empty() ? 0 : attrstr->getBuffer(), **bval, sctrls, 0, &msgid), xsink))
             return false;
 
         LDAPMessage* res = 0;
@@ -994,7 +1545,7 @@ public:
         return false;
     }
 
-    DLLLOCAL int rename(ExceptionSink* xsink, const QoreStringNode* dn, const QoreStringNode* newrdn, const QoreStringNode* newparent, bool deleteoldrdn = true, int my_timeout_ms = 0) {
+    DLLLOCAL int rename(ExceptionSink* xsink, const QoreStringNode* dn, const QoreStringNode* newrdn, const QoreStringNode* newparent, bool deleteoldrdn = true, int my_timeout_ms = 0, const QoreListNode* server_controls = nullptr) {
         // convert strings to UTF-8 if necessary
         QoreStringValueHelper dnstr(dn, QCS_UTF8, xsink);
         if (*xsink)
@@ -1008,6 +1559,11 @@ public:
         if (*xsink)
             return -1;
 
+        // build server controls array
+        LdapControlListHelper sctrls(server_controls, xsink);
+        if (*xsink)
+            return -1;
+
         AutoLocker al(m);
         if (checkValidIntern("rename", xsink))
             return -1;
@@ -1016,10 +1572,8 @@ public:
         if (qore_check_cancel(xsink))
             return -1;
 
-        //printd(5, "LdapClient::rename() dn: '%s' newrdn: '%s' newparent: '%s' deleteoldrdn: %d\n", dnstr->getBuffer(), newrdnstr->getBuffer(), newparentstr->getBuffer(), (int)deleteoldrdn);
-
         int msgid;
-        if (checkLdapError("rename", "ldap_rename", ldap_rename(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), newrdnstr->empty() ? 0 : newrdnstr->getBuffer(), newparentstr->empty() ? 0 : newparentstr->getBuffer(), (int)deleteoldrdn, 0, 0, &msgid), xsink))
+        if (checkLdapError("rename", "ldap_rename", ldap_rename(ldp, dnstr->empty() ? 0 : dnstr->getBuffer(), newrdnstr->empty() ? 0 : newrdnstr->getBuffer(), newparentstr->empty() ? 0 : newparentstr->getBuffer(), (int)deleteoldrdn, sctrls, 0, &msgid), xsink))
             return -1;
 
         LDAPMessage* res = 0;
@@ -1033,7 +1587,7 @@ public:
         return checkFreeResult("rename", "ldap_rename", res, xsink);
     }
 
-    DLLLOCAL int passwd(ExceptionSink* xsink, const QoreStringNode* dn, const QoreStringNode* op, const QoreStringNode* np, int my_timeout_ms = 0) {
+    DLLLOCAL int passwd(ExceptionSink* xsink, const QoreStringNode* dn, const QoreStringNode* op, const QoreStringNode* np, int my_timeout_ms = 0, const QoreListNode* server_controls = nullptr) {
         // convert strings to UTF-8 if necessary
         QoreStringBervalHelper dnstr(dn, xsink);
         if (*xsink)
@@ -1047,6 +1601,11 @@ public:
         if (*xsink)
             return -1;
 
+        // build server controls array
+        LdapControlListHelper sctrls(server_controls, xsink);
+        if (*xsink)
+            return -1;
+
         AutoLocker al(m);
         if (checkValidIntern("passwd", xsink))
             return -1;
@@ -1055,10 +1614,8 @@ public:
         if (qore_check_cancel(xsink))
             return -1;
 
-        //printd(5, "LdapClient::passwd() dn: '%s' old: '%s' new: '%s'\n", dnstr->getBuffer(), opstr->getBuffer(), npstr->getBuffer());
-
         int msgid;
-        if (checkLdapError("passwd", "ldap_passwd", ldap_passwd(ldp, &dnstr, &opstr, &npstr, 0, 0, &msgid), xsink))
+        if (checkLdapError("passwd", "ldap_passwd", ldap_passwd(ldp, &dnstr, &opstr, &npstr, sctrls, 0, &msgid), xsink))
             return -1;
 
         LDAPMessage* res = 0;
@@ -1070,6 +1627,97 @@ public:
         }
 
         return checkFreeResult("passwd", "ldap_passwd", res, xsink);
+    }
+
+    DLLLOCAL QoreHashNode* extendedOp(ExceptionSink* xsink, const QoreStringNode* oid, const BinaryNode* value = nullptr, int my_timeout_ms = 0) {
+        // convert OID to UTF-8
+        QoreStringValueHelper oidstr(oid, QCS_UTF8, xsink);
+        if (*xsink) {
+            return nullptr;
+        }
+
+        // prepare request data
+        struct berval reqdata = {0, nullptr};
+        if (value && value->size() > 0) {
+            reqdata.bv_val = (char*)value->getPtr();
+            reqdata.bv_len = value->size();
+        }
+
+        AutoLocker al(m);
+        if (checkValidIntern("extendedOp", xsink)) {
+            return nullptr;
+        }
+
+        // Check for interrupt
+        if (qore_check_cancel(xsink)) {
+            return nullptr;
+        }
+
+        int msgid;
+        if (checkLdapError("extendedOp", "ldap_extended_operation",
+                ldap_extended_operation(ldp, oidstr->c_str(),
+                    value && value->size() > 0 ? &reqdata : nullptr,
+                    nullptr, nullptr, &msgid), xsink)) {
+            return nullptr;
+        }
+
+        LDAPMessage* res = nullptr;
+        TimeoutHelper timeout(my_timeout_ms);
+
+        if (checkLdapResult("extendedOp", "ldap_extended_operation",
+                ldap_result(ldp, msgid, LDAP_MSG_ALL,
+                    my_timeout_ms ? &timeout : nullptr, &res), xsink)) {
+            assert(!res);
+            return nullptr;
+        }
+
+        ON_BLOCK_EXIT(ldap_msgfree, res);
+
+        // parse extended result
+        char* retoid = nullptr;
+        struct berval* retdata = nullptr;
+        int rc = ldap_parse_extended_result(ldp, res, &retoid, &retdata, 0);
+        if (rc != LDAP_SUCCESS) {
+            if (retoid) {
+                ldap_memfree(retoid);
+            }
+            if (retdata) {
+                ber_bvfree(retdata);
+            }
+            doLdapError("extendedOp", "ldap_parse_extended_result", rc, xsink);
+            return nullptr;
+        }
+
+        // check the result code from the response
+        int err = 0;
+        ldap_parse_result(ldp, res, &err, nullptr, nullptr, nullptr, nullptr, 0);
+        if (err != LDAP_SUCCESS) {
+            if (retoid) {
+                ldap_memfree(retoid);
+            }
+            if (retdata) {
+                ber_bvfree(retdata);
+            }
+            doLdapError("extendedOp", "ldap_extended_operation", err, xsink);
+            return nullptr;
+        }
+
+        // build result hash
+        ReferenceHolder<QoreHashNode> h(new QoreHashNode(autoTypeInfo), xsink);
+        if (retoid) {
+            h->setKeyValue("oid", new QoreStringNode(retoid), xsink);
+            ldap_memfree(retoid);
+        }
+        if (retdata && retdata->bv_len > 0) {
+            BinaryNode* bn = new BinaryNode;
+            bn->append(retdata->bv_val, retdata->bv_len);
+            h->setKeyValue("value", bn, xsink);
+        }
+        if (retdata) {
+            ber_bvfree(retdata);
+        }
+
+        return h.release();
     }
 
     DLLLOCAL QoreStringNode* getUriStr() const {

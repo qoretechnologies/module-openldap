@@ -2,7 +2,7 @@
 /*
   openldap Qore module
 
-  Copyright (C) 2012 - 2024 David Nichols, all rights reserved
+  Copyright (C) 2012 - 2026 David Nichols, all rights reserved
 
   This library is free software; you can redistribute it and/or
   modify it under the terms of the GNU Lesser General Public
@@ -46,6 +46,16 @@ DLLLOCAL QoreClass* initLdapClientClass(QoreNamespace& ns);
 
 // modify action map
 ModMap modmap;
+
+// default binary attributes (lowercase for case-insensitive matching)
+const QoreLdapClient::strset_t QoreLdapClient::default_binary_attrs = {
+    "jpegphoto", "usercertificate", "cacertificate", "objectguid",
+    "objectsid", "usersmimecertificate", "userpkcs12", "audio", "photo",
+    "personalsignature", "x500uniqueidentifier", "supportedalgorithms",
+    "crosscertificatepair", "userpassword", "msexchmailboxguid",
+    "msexchmailboxsecuritydescriptor", "thumbnailphoto",
+    "logonhours", "replicauptodate", "securityidentifier",
+};
 
 static QoreNamespace OLNS("Qore::OpenLdap");
 

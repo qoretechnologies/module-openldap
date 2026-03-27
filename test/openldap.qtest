@@ -7,6 +7,9 @@
 %requires QUnit
 %requires LdapHelper
 %requires LdapConnectionPool
+%requires LdapAsync
+%requires LdifHelper
+%requires LdapActiveDirectory
 
 %exec-class OpenLdapTest
 
@@ -102,6 +105,30 @@ public class OpenLdapTest inherits QUnit::Test {
         addTestCase("LdapConnectionPool withConnection test", \testConnectionPoolWithConnection());
         addTestCase("LdapConnectionPool negative tests", \testConnectionPoolNegative());
         addTestCase("LdapConnectionPool cleanup test", \testConnectionPoolCleanup());
+
+        # New v2.0 feature tests
+        addTestCase("Control OID constants test", \testControlConstants());
+        addTestCase("Controls parameter test", \testControlsParameter());
+        addTestCase("Controls negative tests", \testControlsNegative());
+        addTestCase("RFC 4514 DN escaping test", \testDnEscaping());
+        addTestCase("RFC 4514 DN multi-valued RDN test", \testDnMultiValued());
+        addTestCase("Binary attribute handling test", \testBinaryAttributes());
+        addTestCase("Binary attribute per-search override test", \testBinaryAttributeSearch());
+        addTestCase("Extended operation test", \testExtendedOp());
+        addTestCase("Extended operation negative test", \testExtendedOpNegative());
+        addTestCase("Paged results test", \testPagedResults());
+        addTestCase("SASL bind negative test", \testSaslBindNegative());
+        addTestCase("LdapAsync test", \testLdapAsync());
+        addTestCase("LdapAsync error propagation test", \testLdapAsyncErrors());
+        addTestCase("LdapUrl parsing test", \testLdapUrl());
+        addTestCase("LdapUrl corner cases test", \testLdapUrlCornerCases());
+        addTestCase("LdapSchema test", \testLdapSchema());
+        addTestCase("LdifReader test", \testLdifReader());
+        addTestCase("LdifWriter test", \testLdifWriter());
+        addTestCase("LdapConnectionPool reconnect test", \testConnectionPoolReconnect());
+        addTestCase("ActiveDirectoryClient GUID/SID decoding test", \testAdDecoding());
+        addTestCase("LdapClientHelper whoAmI test", \testWhoAmI());
+        addTestCase("Extended op OID constants test", \testExtOpConstants());
 
         set_return_value(main());
     }
@@ -1403,19 +1430,19 @@ public class OpenLdapTest inherits QUnit::Test {
             assertEq("", dn.getParent());
         }
 
-        # test DN with spaces
+        # test DN with spaces (getRdn returns raw string, getRdnType/Value are trimmed)
         {
             LdapDn dn("cn = Test User , ou = people , dc = example , dc = com");
-            assertEq("cn=Test User", dn.getRdn());
+            assertEq("cn = Test User", dn.getRdn());
             assertEq("Test User", dn.getRdnValue());
             assertEq("cn", dn.getRdnType());
         }
 
-        # test DN without equals sign (malformed)
+        # test DN without equals sign (malformed) — stored as raw string but no type/value
         {
             LdapDn dn("malformed-dn");
             assertEq("malformed-dn", dn.toString());
-            assertEq("", dn.getRdn());
+            assertEq("malformed-dn", dn.getRdn());
             assertEq("", dn.getRdnValue());
             assertEq("", dn.getRdnType());
         }
@@ -1677,6 +1704,717 @@ public class OpenLdapTest inherits QUnit::Test {
                 pool.get();
             });
         }
+    }
+
+    # ============================================================
+    # New v2.0 feature tests
+    # ============================================================
+
+    #! Test control OID constants
+    testControlConstants() {
+        assertEq(Type::String, LDAP_CONTROL_PAGEDRESULTS.type());
+        assertEq("1.2.840.113556.1.4.319", LDAP_CONTROL_PAGEDRESULTS);
+        assertEq("1.2.840.113556.1.4.473", LDAP_CONTROL_SORTREQUEST);
+        assertEq("1.2.840.113556.1.4.474", LDAP_CONTROL_SORTRESPONSE);
+        assertEq("2.16.840.1.113730.3.4.9", LDAP_CONTROL_VLVREQUEST);
+        assertEq("2.16.840.1.113730.3.4.10", LDAP_CONTROL_VLVRESPONSE);
+        assertEq("2.16.840.1.113730.3.4.18", LDAP_CONTROL_PROXY_AUTHZ);
+        assertEq("2.16.840.1.113730.3.4.2", LDAP_CONTROL_MANAGEDSAIT);
+        assertEq("1.2.840.113556.1.4.417", LDAP_CONTROL_SHOW_DELETED);
+        assertEq("1.2.840.113556.1.4.2064", LDAP_CONTROL_SHOW_RECYCLED);
+        assertEq("1.3.6.1.4.1.42.2.27.8.5.1", LDAP_CONTROL_PASSWORDPOLICYREQUEST);
+        assertEq("1.3.6.1.1.12", LDAP_CONTROL_ASSERTION);
+        assertEq("1.3.6.1.1.13.1", LDAP_CONTROL_PRE_READ);
+        assertEq("1.3.6.1.1.13.2", LDAP_CONTROL_POST_READ);
+    }
+
+    #! Test controls parameter on search (empty controls = backwards compat)
+    testControlsParameter() {
+        LdapClient ldap = getClient();
+
+        # search with empty controls (backwards compatible)
+        hash<auto> result = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        }, NOTHING, ());
+        assertEq(Type::Hash, result.type());
+        assertTrue(result.hasKey(basedn));
+
+        # search with controls in the search options hash
+        result = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+            "controls": (),
+        });
+        assertEq(Type::Hash, result.type());
+        assertTrue(result.hasKey(basedn));
+
+        # add with empty controls
+        if (canWrite()) {
+            cleanupTestEntry();
+            ldap.add(testEntryDn, {
+                "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+                "uid": "qoretest", "cn": "Test", "sn": "Test",
+                "uidNumber": "99999", "gidNumber": "99999",
+                "homeDirectory": "/home/qoretest",
+            }, NOTHING, ());
+            ldap.del(testEntryDn, NOTHING, ());
+        }
+    }
+
+    #! Test controls parameter negative cases
+    testControlsNegative() {
+        LdapClient ldap = getClient();
+
+        # malformed control (not a hash)
+        assertThrows("LDAP-CONTROL-ERROR", sub() {
+            ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            }, NOTHING, ("not-a-hash",));
+        });
+
+        # control hash missing OID
+        assertThrows("LDAP-CONTROL-ERROR", sub() {
+            ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            }, NOTHING, ({"critical": True},));
+        });
+
+        # control with invalid value type
+        assertThrows("LDAP-CONTROL-ERROR", sub() {
+            ldap.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            }, NOTHING, ({"oid": "1.2.3.4", "value": 12345},));
+        });
+    }
+
+    #! Test RFC 4514 DN escaping
+    testDnEscaping() {
+        # escaped comma in value
+        {
+            LdapDn dn("CN=Smith\\, John,OU=Users,DC=example,DC=com");
+            assertEq("CN=Smith\\, John", dn.getRdn());
+            assertEq("Smith, John", dn.getRdnValue());
+            assertEq("CN", dn.getRdnType());
+            assertEq("OU=Users,DC=example,DC=com", dn.getParent());
+            assertEq(4, dn.depth());
+        }
+
+        # hex-escaped characters
+        {
+            LdapDn dn("CN=Test\\2CUser,DC=example,DC=com");
+            assertEq("Test,User", dn.getRdnValue());
+        }
+
+        # escaped special characters
+        {
+            LdapDn dn("CN=Test\\+Special\\=Chars,DC=example,DC=com");
+            assertEq("Test+Special=Chars", dn.getRdnValue());
+        }
+
+        # escape/unescape round-trip
+        {
+            string raw = "Smith, John+Jr.";
+            string escaped = LdapDn::escape(raw);
+            assertTrue(escaped.find("\\,") >= 0);
+            assertTrue(escaped.find("\\+") >= 0);
+            string unescaped = LdapDn::unescape(escaped);
+            assertEq(raw, unescaped);
+        }
+
+        # escape leading # and space
+        {
+            assertEq("\\#hash", LdapDn::escape("#hash"));
+            assertEq("\\ leading", LdapDn::escape(" leading"));
+            assertEq("trailing\\ ", LdapDn::escape("trailing "));
+        }
+
+        # simple DN still works
+        {
+            LdapDn dn("uid=test,ou=people,dc=example,dc=com");
+            assertEq("uid=test", dn.getRdn());
+            assertEq("test", dn.getRdnValue());
+            assertEq("uid", dn.getRdnType());
+            assertEq("ou=people,dc=example,dc=com", dn.getParent());
+        }
+
+        # empty DN
+        {
+            LdapDn dn("");
+            assertEq("", dn.getRdn());
+            assertEq("", dn.getRdnValue());
+            assertEq("", dn.getParent());
+            assertEq(0, dn.depth());
+        }
+    }
+
+    #! Test multi-valued RDN support
+    testDnMultiValued() {
+        # multi-valued RDN with +
+        {
+            LdapDn dn("CN=Test+UID=tuser,DC=example,DC=com");
+            list<hash<RdnComponent>> parts = dn.getRdnComponents();
+            assertEq(2, parts.size());
+            assertEq("CN", parts[0].type);
+            assertEq("Test", parts[0].value);
+            assertEq("UID", parts[1].type);
+            assertEq("tuser", parts[1].value);
+        }
+
+        # escaped + in value (not a multi-valued separator)
+        {
+            LdapDn dn("CN=A\\+B,DC=example,DC=com");
+            list<hash<RdnComponent>> parts = dn.getRdnComponents();
+            assertEq(1, parts.size());
+            assertEq("A+B", parts[0].value);
+        }
+    }
+
+    #! Test binary attribute handling
+    testBinaryAttributes() {
+        skipIfReadOnly("binary attribute test requires write access");
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+
+        # create entry with userPassword (a known binary attribute)
+        hash<auto> attrs = {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest", "cn": "Test", "sn": "Test",
+            "uidNumber": "99999", "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+            "userPassword": "testpass",
+        };
+        ldap.add(testEntryDn, attrs);
+
+        # default: userPassword returned as binary (it's in the known-binary list)
+        hash<auto> result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+            "attributes": ("uid", "userPassword"),
+        });
+        assertTrue(result.hasKey(testEntryDn));
+        # userPassword is in the default binary list
+        auto upwd = result{testEntryDn}.userPassword;
+        assertEq(NT_BINARY, upwd.typeCode());
+
+        # uid should still be a string
+        assertEq(Type::String, result{testEntryDn}.uid.type());
+
+        ldap.del(testEntryDn);
+    }
+
+    #! Test per-search binary attribute override
+    testBinaryAttributeSearch() {
+        skipIfReadOnly("binary attribute search test requires write access");
+        LdapClient ldap = getClient();
+        cleanupTestEntry();
+
+        hash<auto> attrs = {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "qoretest", "cn": "Test", "sn": "Test",
+            "uidNumber": "99999", "gidNumber": "99999",
+            "homeDirectory": "/home/qoretest",
+            "description": "test description",
+        };
+        ldap.add(testEntryDn, attrs);
+
+        # per-search binary-attributes: force "description" to be binary
+        hash<auto> result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+            "attributes": ("description",),
+            "binary-attributes": ("description",),
+        });
+        assertTrue(result.hasKey(testEntryDn));
+        assertEq(NT_BINARY, result{testEntryDn}.description.typeCode());
+
+        # same search without binary-attributes: description should be string
+        result = ldap.search({
+            "base": testEntryDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+            "attributes": ("description",),
+        });
+        assertEq(Type::String, result{testEntryDn}.description.type());
+
+        # all-binary constructor option
+        {
+            hash allbin_opts = {
+                "all-binary": True,
+            };
+            if (binddn.val()) {
+                allbin_opts.binddn = binddn;
+                allbin_opts.password = password;
+            }
+            LdapClient allbin(uri, allbin_opts);
+            result = allbin.search({
+                "base": testEntryDn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+                "attributes": ("uid",),
+            });
+            assertEq(NT_BINARY, result{testEntryDn}.uid.typeCode());
+        }
+
+        ldap.del(testEntryDn);
+    }
+
+    #! Test extendedOp (Who Am I?)
+    testExtendedOp() {
+        skipIfReadOnly("extended op test requires bind");
+        LdapClient ldap = getClient();
+
+        # Who Am I? extended operation
+        hash<auto> result = ldap.extendedOp(LDAP_EXOP_WHO_AM_I);
+        assertEq(Type::Hash, result.type());
+        # result should contain our bind DN
+        if (exists result.value) {
+            string identity = result.value.toString("UTF-8");
+            assertTrue(identity.size() > 0);
+        }
+    }
+
+    #! Test extendedOp negative cases
+    testExtendedOpNegative() {
+        LdapClient ldap = getClient();
+
+        # invalid OID
+        assertThrows("LDAP-ERROR", sub() {
+            ldap.extendedOp("9.9.9.9.9.9.9.9.9");
+        });
+    }
+
+    #! Test paged results
+    testPagedResults() {
+        LdapClient ldap = getClient();
+
+        # search with page-size option
+        hash<auto> result = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_SUBTREE,
+            "page-size": 2,
+        });
+        assertEq(Type::Hash, result.type());
+        # should get at least the base entry + sub-entries
+        assertTrue(result.size() >= 1);
+
+        # compare with non-paged search to verify same results
+        hash<auto> nonPaged = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_SUBTREE,
+        });
+        assertEq(nonPaged.size(), result.size());
+
+        # page-size of 1 (extreme case)
+        result = ldap.search({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_SUBTREE,
+            "page-size": 1,
+        });
+        assertEq(nonPaged.size(), result.size());
+    }
+
+    #! Test SASL bind negative cases
+    testSaslBindNegative() {
+        LdapClient ldap(uri);
+
+        # missing mechanism
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"password": "test"});
+        });
+
+        # unsupported mechanism (server may not support DIGEST-MD5)
+        assertThrows("LDAP-ERROR", sub() {
+            ldap.saslBind({"mechanism": "DIGEST-MD5", "authcid": "test", "password": "wrong"});
+        });
+    }
+
+    #! Test async operations
+    testLdapAsync() {
+        LdapClient client = getClient();
+        hash<auto> asyncOpts;
+        if (binddn.val()) {
+            asyncOpts = {"binddn": binddn, "password": password};
+        }
+        LdapAsyncClient async(uri, asyncOpts);
+
+        # async parallel search
+        LdapFuture f1 = async.searchAsync({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+
+        # should complete and return a hash
+        auto r1 = f1.get(30s);
+        assertEq(Type::Hash, r1.type());
+        assertTrue(r1.size() > 0);
+
+        # isDone should be true after get
+        assertTrue(f1.isDone());
+
+        # searchParallel
+        list<LdapFuture> futures = async.searchParallel(({
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        }, {
+            "base": basedn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        }));
+        assertEq(2, futures.size());
+        auto pr1 = futures[0].get(30s);
+        auto pr2 = futures[1].get(30s);
+        assertEq(Type::Hash, pr1.type());
+        assertEq(Type::Hash, pr2.type());
+
+        # async add/del
+        if (canWrite()) {
+            cleanupTestEntry();
+            LdapFuture af = async.addAsync(testEntryDn, {
+                "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+                "uid": "qoretest", "cn": "Test", "sn": "Test",
+                "uidNumber": "99999", "gidNumber": "99999",
+                "homeDirectory": "/home/qoretest",
+            });
+            af.get(30s);  # wait for add to complete
+
+            # verify it exists
+            hash<auto> verify = client.search({
+                "base": testEntryDn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+            assertTrue(verify.hasKey(testEntryDn));
+
+            # async delete
+            LdapFuture df = async.delAsync(testEntryDn);
+            df.get(30s);
+        }
+    }
+
+    #! Test async error propagation
+    testLdapAsyncErrors() {
+        LdapAsyncClient async("ldap://localhost:1");
+
+        # search with invalid base DN should throw
+        LdapFuture f = async.searchAsync({
+            "base": "cn=nonexistent,dc=nonexistent,dc=invalid",
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+        });
+
+        # error should propagate through the Future
+        bool got_error = False;
+        try {
+            f.get(30s);
+        } catch (hash<ExceptionInfo> ex) {
+            got_error = True;
+            # should be an LDAP error
+            assertTrue(ex.err =~ /LDAP/);
+        }
+        assertTrue(got_error);
+        assertTrue(f.isDone());
+    }
+
+    #! Test LDAP URL parsing
+    testLdapUrl() {
+        # basic URL
+        {
+            LdapUrl url("ldap://ldap.example.com/dc=example,dc=com");
+            assertEq("ldap", url.scheme);
+            assertEq("ldap.example.com", url.host);
+            assertFalse(exists url.port);
+            assertEq("dc=example,dc=com", url.baseDn);
+        }
+
+        # full URL with all components
+        {
+            LdapUrl url("ldap://ldap.example.com:389/dc=example,dc=com?cn,sn?sub?(objectClass=*)");
+            assertEq("ldap", url.scheme);
+            assertEq("ldap.example.com", url.host);
+            assertEq(389, url.port);
+            assertEq("dc=example,dc=com", url.baseDn);
+            assertEq(("cn", "sn"), url.attributes);
+            assertEq("sub", url.scope);
+            assertEq("(objectClass=*)", url.filter);
+        }
+
+        # ldaps scheme
+        {
+            LdapUrl url("ldaps://secure.example.com:636/dc=test,dc=com");
+            assertEq("ldaps", url.scheme);
+            assertEq("secure.example.com", url.host);
+            assertEq(636, url.port);
+        }
+
+        # toSearchOpts
+        {
+            LdapUrl url("ldap://host/dc=test?cn,sn?one?(uid=test)");
+            hash<auto> opts = url.toSearchOpts();
+            assertEq("dc=test", opts.base);
+            assertEq("(uid=test)", opts.filter);
+            assertEq(("cn", "sn"), opts.attributes);
+            assertEq(LDAP_SCOPE_ONELEVEL, opts.scope);
+        }
+
+        # getServerUri
+        {
+            LdapUrl url("ldap://host:389/base");
+            assertEq("ldap://host:389", url.getServerUri());
+        }
+    }
+
+    #! Test LDAP URL corner cases
+    testLdapUrlCornerCases() {
+        # URL with no base
+        {
+            LdapUrl url("ldap://host/");
+            assertEq("host", url.host);
+            assertFalse(exists url.baseDn);
+        }
+
+        # URL with no path
+        {
+            LdapUrl url("ldap://host");
+            assertEq("host", url.host);
+        }
+
+        # invalid scheme
+        assertThrows("LDAP-URL-ERROR", sub() {
+            new LdapUrl("http://host/");
+        });
+
+        # toString round-trip
+        {
+            string original = "ldap://host:389/dc=test";
+            LdapUrl url(original);
+            assertEq(original, url.toString());
+        }
+    }
+
+    #! Test schema introspection
+    testLdapSchema() {
+        LdapClient ldap = getClient();
+
+        LdapSchema schema(ldap);
+
+        # test getObjectClassNames — may be empty if server doesn't expose schema
+        list<string> ocNames = schema.getObjectClassNames();
+        list<string> atNames = schema.getAttributeTypeNames();
+
+        if (ocNames.empty()) {
+            # server doesn't support schema introspection — test basic API still works
+            assertFalse(exists schema.getObjectClass("top"));
+            assertFalse(exists schema.getAttributeType("cn"));
+            assertEq((), schema.getRequiredAttributes("top"));
+            assertFalse(schema.isBinaryAttribute("cn"));
+        } else {
+            assertTrue(ocNames.size() > 0);
+            assertTrue(atNames.size() > 0);
+
+            # verify a well-known object class exists
+            bool found_oc = False;
+            for (int i = 0; i < ocNames.size(); i++) {
+                if (ocNames[i].lwr() == "top" || ocNames[i].lwr() == "organization") {
+                    found_oc = True;
+                    break;
+                }
+            }
+            assertTrue(found_oc);
+        }
+
+        # test non-existent class always returns NOTHING
+        assertFalse(exists schema.getObjectClass("nonExistentClass12345"));
+    }
+
+    #! Test LDIF reader
+    testLdifReader() {
+        # create a test LDIF string
+        list<string> lines = (
+            "dn: dc=example,dc=com",
+            "objectClass: top",
+            "objectClass: domain",
+            "dc: example",
+            "",
+            "dn: ou=people,dc=example,dc=com",
+            "objectClass: organizationalUnit",
+            "ou: people",
+            "description:: VGVzdCBkZXNjcmlwdGlvbg==",
+            "",
+        );
+
+        LdifReader reader(lines);
+
+        # read first entry
+        *hash<LdifEntryInfo> entry1 = reader.readEntry();
+        assertTrue(exists entry1);
+        assertEq("dc=example,dc=com", entry1.dn);
+        assertEq("top", entry1.attributes.objectClass[0]);
+        assertEq("domain", entry1.attributes.objectClass[1]);
+        assertEq("example", entry1.attributes.dc);
+
+        # read second entry
+        *hash<LdifEntryInfo> entry2 = reader.readEntry();
+        assertTrue(exists entry2);
+        assertEq("ou=people,dc=example,dc=com", entry2.dn);
+        assertEq("organizationalUnit", entry2.attributes.objectClass);
+        # base64-decoded value
+        assertEq("Test description", entry2.attributes.description);
+
+        # end of entries
+        *hash<LdifEntryInfo> entry3 = reader.readEntry();
+        assertFalse(exists entry3);
+    }
+
+    #! Test LDIF writer
+    testLdifWriter() {
+        # write to a temp file
+        string tmpFile = "/tmp/qore-ldif-test-" + string(getpid()) + ".ldif";
+        {
+            LdifWriter writer(tmpFile);
+            writer.writeComment("Test LDIF file");
+            writer.writeEntry("dc=example,dc=com", {
+                "objectClass": ("top", "domain"),
+                "dc": "example",
+            });
+            writer.writeEntry("ou=people,dc=example,dc=com", {
+                "objectClass": "organizationalUnit",
+                "ou": "people",
+            });
+        }
+
+        # read it back
+        LdifReader reader(tmpFile);
+        list<hash<LdifEntryInfo>> entries = reader.readAll();
+        assertEq(2, entries.size());
+        assertEq("dc=example,dc=com", entries[0].dn);
+        assertEq("ou=people,dc=example,dc=com", entries[1].dn);
+
+        # cleanup
+        unlink(tmpFile);
+    }
+
+    #! Test connection pool reconnect/health check functionality
+    testConnectionPoolReconnect() {
+        hash<auto> opts;
+        if (binddn.val()) {
+            opts = {"binddn": binddn, "password": password};
+        }
+
+        # test pool with health check enabled
+        LdapConnectionPool pool(uri, opts, {
+            "min_connections": 1,
+            "max_connections": 3,
+            "health_check": True,
+            "reconnect": True,
+            "max_reconnect_retries": 2,
+            "reconnect_delay": 1,
+        });
+
+        # withConnectionRetry should work for normal operations
+        auto result = pool.withConnectionRetry(auto sub(LdapClient conn) {
+            return conn.search({
+                "base": basedn,
+                "filter": "(objectClass=*)",
+                "scope": LDAP_SCOPE_BASE,
+            });
+        });
+        assertEq(Type::Hash, result.type());
+
+        # test isConnectionError static method
+        assertTrue(LdapConnectionPool::isConnectionError(cast<hash<ExceptionInfo>>({
+            "err": "LDAP-ERROR",
+            "desc": "ldap server 'ldap://host' returned error code -1 when calling ldap_search_ext() in LdapClient::search(): Can't contact LDAP server",
+        })));
+        assertTrue(LdapConnectionPool::isConnectionError(cast<hash<ExceptionInfo>>({
+            "err": "LDAP-NO-CONTEXT",
+            "desc": "cannot execute LdapClient::search(); the LdapClient object has been destroyed or the session context has been unbound",
+        })));
+        assertFalse(LdapConnectionPool::isConnectionError(cast<hash<ExceptionInfo>>({
+            "err": "LDAP-RESULT-ERROR",
+            "desc": "no such object",
+        })));
+
+        # test discardConnection
+        LdapClient conn = pool.get();
+        hash<auto> stats = pool.getStats();
+        int totalBefore = stats.total;
+        pool.discardConnection(conn);
+        stats = pool.getStats();
+        assertEq(totalBefore - 1, stats.total);
+
+        pool.close();
+    }
+
+    #! Test Active Directory GUID/SID decoding
+    testAdDecoding() {
+        # test objectGUID decoding
+        # Known GUID: {6cb4b542-13c7-4e90-b38a-7e89d2a5bf3c}
+        # Binary (LE mixed-endian): 42 b5 b4 6c c7 13 90 4e b3 8a 7e 89 d2 a5 bf 3c
+        binary guid = <42b5b46cc713904eb38a7e89d2a5bf3c>;
+        string guidStr = ActiveDirectoryClient::decodeObjectGUID(guid);
+        assertEq("{6cb4b542-13c7-4e90-b38a-7e89d2a5bf3c}", guidStr);
+
+        # test objectGUID wrong size
+        assertThrows("LDAP-AD-ERROR", sub() {
+            ActiveDirectoryClient::decodeObjectGUID(<0102030405>);
+        });
+
+        # test objectSid decoding
+        # Known SID: S-1-5-21-3623811015-3361044348-30300820-1013
+        # Binary: 01 05 00 00 00 00 00 05 15 00 00 00 A7 65 E0 D7 FC B4 6D C8 04 55 CE 01 F5 03 00 00
+        binary sid = <0105000000000005150000009765E0D7FCB46DC80455CE01F5030000>;
+        string sidStr = ActiveDirectoryClient::decodeObjectSid(sid);
+        assertEq("S-1-5-21-", sidStr.substr(0, 9));
+        assertTrue(sidStr =~ /^S-1-5-21-/);
+
+        # test objectSid wrong size
+        assertThrows("LDAP-AD-ERROR", sub() {
+            ActiveDirectoryClient::decodeObjectSid(<0102>);
+        });
+
+        # simple well-known SID: S-1-5-18 (Local System)
+        binary localSys = <01010000000000051200000000000000>;
+        string localSysStr = ActiveDirectoryClient::decodeObjectSid(localSys);
+        assertEq("S-1-5-18", localSysStr);
+    }
+
+    #! Test whoAmI convenience method
+    testWhoAmI() {
+        skipIfReadOnly("whoAmI test requires bind");
+        hash<auto> opts;
+        if (binddn.val()) {
+            opts = {"binddn": binddn, "password": password};
+        }
+        LdapClientHelper helper(uri, opts);
+
+        string identity = helper.whoAmI();
+        # should contain our bind DN
+        assertTrue(identity.size() > 0);
+    }
+
+    #! Test extended operation OID constants
+    testExtOpConstants() {
+        assertEq("1.3.6.1.4.1.4203.1.11.3", LDAP_EXOP_WHO_AM_I);
+        assertEq("1.3.6.1.1.8", LDAP_EXOP_CANCEL);
+        assertEq("1.3.6.1.4.1.4203.1.11.1", LDAP_EXOP_MODIFY_PASSWD);
+        assertEq("1.3.6.1.4.1.1466.20037", LDAP_EXOP_START_TLS);
+        assertEq("1.3.6.1.4.1.1466.101.119.1", LDAP_EXOP_REFRESH);
     }
 
     #! Test LdapConnectionPool cleanup functionality

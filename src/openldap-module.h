@@ -1,10 +1,10 @@
 /* -*- mode: c++; indent-tabs-mode: nil -*- */
 /*
   openldap-module.h
-  
+
   Qore Programming Language
 
-  Copyright 2003 - 2024 David Nichols
+  Copyright 2003 - 2026 David Nichols
 
   This library is free software; you can redistribute it and/or
   modify it under the terms of the GNU Lesser General Public
@@ -30,6 +30,7 @@
 #include <qore/QoreSandboxManager.h>
 
 #include <ldap.h>
+#include <sasl/sasl.h>
 
 #include <map>
 #include <string>

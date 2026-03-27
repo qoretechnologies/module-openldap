@@ -1,0 +1,275 @@
+# -*- mode: qore; indent-tabs-mode: nil -*-
+#! @file LdapAsync.qm Qore OpenLDAP module async operation support
+
+/*  LdapAsync.qm Copyright 2026 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+%modern
+
+module LdapAsync {
+    version = "1.0";
+    desc = "Asynchronous LDAP operations using Future/Promise pattern";
+    author = "David Nichols <david@qore.org>";
+    url = "https://qore.org";
+    license = "MIT";
+}
+
+%requires openldap
+
+/** @mainpage LdapAsync Module
+
+    @section ldapasyncintro Introduction
+
+    This module provides asynchronous LDAP operations using the Qore
+    Future/Promise pattern. Each async operation spawns a background thread
+    with a separate connection copy, allowing true parallel execution.
+
+    @section ldapasync_classes Classes
+
+    - @ref LdapFuture - Wrapper around Qore's Future with LDAP-specific defaults
+    - @ref LdapAsyncClient - Async client providing non-blocking LDAP operations
+*/
+
+#! Wrapper around Qore's Future for LDAP operations
+/**
+    Provides a typed wrapper with sensible default timeout for LDAP operations.
+*/
+public class LdapFuture {
+    private {
+        Future future;
+    }
+
+    #! Creates a new LdapFuture wrapping a raw Future
+    constructor(Future future) {
+        self.future = future;
+    }
+
+    #! Gets the result, blocking until available or timeout
+    /**
+        @param timeout_ms optional timeout; defaults to 30 seconds
+        @return the operation result
+
+        @throw FUTURE-TIMEOUT the timeout expired before the result was available
+        @throw any exception thrown by the underlying LDAP operation is propagated
+    */
+    auto get(*timeout timeout_ms) {
+        return future.get(timeout_ms ?? 30s);
+    }
+
+    #! Returns True if the operation has completed (success or error)
+    bool isDone() {
+        return future.isDone();
+    }
+
+    #! Returns True if the operation completed with an error
+    bool isError() {
+        return future.isError();
+    }
+}
+
+#! Asynchronous LDAP client using connection copies and background threads
+/**
+    Each async operation creates a copy of the template connection and executes
+    the operation in a background thread, returning an LdapFuture that can be
+    used to retrieve the result.
+
+    This allows multiple operations to execute in parallel without blocking
+    each other, since each uses an independent LDAP connection.
+
+    @par Example:
+    @code
+LdapClient client("ldap://server", {"binddn": "cn=admin,...", "password": "secret"});
+LdapAsyncClient async(client);
+
+# fire off parallel searches
+LdapFuture f1 = async.searchAsync({"base": "ou=people,...", "filter": "(uid=user1)"});
+LdapFuture f2 = async.searchAsync({"base": "ou=groups,...", "filter": "(cn=admins)"});
+
+# collect results
+hash<auto> users = f1.get(30s);
+hash<auto> groups = f2.get(30s);
+    @endcode
+*/
+public class LdapAsyncClient {
+    private {
+        string uri;
+        *hash<auto> connOpts;
+    }
+
+    #! Creates a new async client from a URI and connection options
+    /**
+        @param uri the LDAP server URI
+        @param opts connection options (same as LdapClient constructor)
+    */
+    constructor(string uri, *hash<auto> opts) {
+        self.uri = uri;
+        self.connOpts = opts;
+    }
+
+    #! Creates a new async client from an existing LdapClient
+    /**
+        @param client the LdapClient whose URI will be used; note that each async
+        operation creates a fresh independent connection
+    */
+    constructor(LdapClient client) {
+        self.uri = client.getUri();
+    }
+
+    #! Creates a new async client from a URI, bind DN, and password
+    /**
+        @param uri the LDAP server URI
+        @param binddn the bind DN
+        @param password the password
+    */
+    constructor(string uri, string binddn, string password) {
+        self.uri = uri;
+        self.connOpts = {"binddn": binddn, "password": password};
+    }
+
+    #! Creates a fresh connection for an async operation
+    private LdapClient createConnection() {
+        return new LdapClient(uri, connOpts);
+    }
+
+    #! Performs an async search operation
+    /**
+        @param searchOpts search options hash (same as LdapClient::search())
+        @param timeout_ms optional per-operation timeout
+        @return an LdapFuture that resolves to the search result hash
+    */
+    LdapFuture searchAsync(hash<auto> searchOpts, *timeout timeout_ms) {
+        string l_uri = uri;
+        *hash<auto> l_opts = connOpts;
+        return new LdapFuture(call_async(hash<auto> sub() {
+            LdapClient conn(l_uri, l_opts);
+            return conn.search(searchOpts, timeout_ms);
+        }));
+    }
+
+    #! Performs an async add operation
+    /**
+        @param dn the distinguished name of the entry to add
+        @param attrs the entry attributes
+        @param timeout_ms optional per-operation timeout
+        @return an LdapFuture that resolves when the add completes
+    */
+    LdapFuture addAsync(string dn, hash<auto> attrs, *timeout timeout_ms) {
+        string l_uri = uri;
+        *hash<auto> l_opts = connOpts;
+        return new LdapFuture(call_async(sub() {
+            LdapClient conn(l_uri, l_opts);
+            conn.add(dn, attrs, timeout_ms);
+        }));
+    }
+
+    #! Performs an async modify operation
+    /**
+        @param dn the distinguished name of the entry to modify
+        @param mods the modifications list
+        @param timeout_ms optional per-operation timeout
+        @return an LdapFuture that resolves when the modify completes
+    */
+    LdapFuture modifyAsync(string dn, softlist<auto> mods, *timeout timeout_ms) {
+        string l_uri = uri;
+        *hash<auto> l_opts = connOpts;
+        return new LdapFuture(call_async(sub() {
+            LdapClient conn(l_uri, l_opts);
+            conn.modify(dn, mods, timeout_ms);
+        }));
+    }
+
+    #! Performs an async delete operation
+    /**
+        @param dn the distinguished name of the entry to delete
+        @param timeout_ms optional per-operation timeout
+        @return an LdapFuture that resolves when the delete completes
+    */
+    LdapFuture delAsync(string dn, *timeout timeout_ms) {
+        string l_uri = uri;
+        *hash<auto> l_opts = connOpts;
+        return new LdapFuture(call_async(sub() {
+            LdapClient conn(l_uri, l_opts);
+            conn.del(dn, timeout_ms);
+        }));
+    }
+
+    #! Performs an async compare operation
+    /**
+        @param dn the distinguished name
+        @param attr the attribute name
+        @param vals the values to compare
+        @param timeout_ms optional per-operation timeout
+        @return an LdapFuture that resolves to True/False
+    */
+    LdapFuture compareAsync(string dn, string attr, softlist<auto> vals, *timeout timeout_ms) {
+        string l_uri = uri;
+        *hash<auto> l_opts = connOpts;
+        return new LdapFuture(call_async(auto sub() {
+            LdapClient conn(l_uri, l_opts);
+            return conn.compare(dn, attr, vals, timeout_ms);
+        }));
+    }
+
+    #! Performs an async rename operation
+    /**
+        @param dn the distinguished name
+        @param newrdn the new RDN
+        @param newparent the new parent DN
+        @param deleteoldrdn whether to delete the old RDN
+        @param timeout_ms optional per-operation timeout
+        @return an LdapFuture that resolves when the rename completes
+    */
+    LdapFuture renameAsync(string dn, string newrdn, string newparent,
+            softbool deleteoldrdn = True, *timeout timeout_ms) {
+        string l_uri = uri;
+        *hash<auto> l_opts = connOpts;
+        return new LdapFuture(call_async(sub() {
+            LdapClient conn(l_uri, l_opts);
+            conn.rename(dn, newrdn, newparent, deleteoldrdn, timeout_ms);
+        }));
+    }
+
+    #! Performs an async extended operation
+    /**
+        @param oid the extended operation OID
+        @param value optional request data
+        @param timeout_ms optional per-operation timeout
+        @return an LdapFuture that resolves to the extended operation result hash
+    */
+    LdapFuture extendedOpAsync(string oid, *binary value, *timeout timeout_ms) {
+        string l_uri = uri;
+        *hash<auto> l_opts = connOpts;
+        return new LdapFuture(call_async(hash<auto> sub() {
+            LdapClient conn(l_uri, l_opts);
+            return conn.extendedOp(oid, value, timeout_ms);
+        }));
+    }
+
+    #! Runs multiple searches in parallel
+    /**
+        @param searchOptsList list of search option hashes
+        @param timeout_ms optional per-operation timeout
+        @return list of LdapFutures, one per search
+    */
+    list<LdapFuture> searchParallel(list<hash<auto>> searchOptsList, *timeout timeout_ms) {
+        return map self.searchAsync($1, timeout_ms), searchOptsList;
+    }
+}

@@ -1,0 +1,249 @@
+# -*- mode: qore; indent-tabs-mode: nil -*-
+#! @file LdapActiveDirectory.qm Active Directory compatibility helpers
+
+/*  LdapActiveDirectory.qm Copyright 2026 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+%modern
+
+module LdapActiveDirectory {
+    version = "1.0";
+    desc = "Active Directory compatibility helpers for OpenLDAP module";
+    author = "David Nichols <david@qore.org>";
+    url = "https://qore.org";
+    license = "MIT";
+}
+
+%requires openldap
+%requires LdapHelper
+
+/** @mainpage LdapActiveDirectory Module
+
+    @section ldapadintro Introduction
+
+    This module provides Active Directory-specific functionality including
+    automatic paged search, range retrieval for large multi-valued attributes,
+    objectGUID/objectSid decoding, and deleted object search.
+*/
+
+#! Active Directory client with AD-specific helpers
+/**
+    Extends LdapClientHelper with methods tailored for Microsoft Active Directory,
+    including automatic paged searches, range retrieval, and binary attribute decoding.
+*/
+public class ActiveDirectoryClient inherits LdapClientHelper {
+    public {
+        #! Default AD page size (AD's default max is 1000)
+        const DefaultPageSize = 1000;
+        #! Default AD range retrieval step size (AD limits to 1500 per page)
+        const DefaultRangeStep = 1500;
+    }
+
+    #! Creates a new AD client from a URI and options
+    constructor(string uri, *hash<auto> opts) : LdapClientHelper(uri, opts) {
+    }
+
+    #! Creates a new AD client wrapping an existing LdapClient
+    constructor(LdapClient client) : LdapClientHelper(client) {
+    }
+
+    #! Performs a paged search, automatically handling AD size limits
+    /**
+        @param searchOpts search options hash; "page-size" defaults to 1000 if not set
+        @param timeout optional timeout
+        @return the complete search result hash
+
+        This method automatically adds the paged results control to handle
+        Active Directory's default 1000-entry size limit.
+    */
+    hash<auto> searchPaged(hash<auto> searchOpts, *timeout timeout) {
+        if (!searchOpts.hasKey("page-size")) {
+            searchOpts."page-size" = DefaultPageSize;
+        }
+        return getClient().search(searchOpts, timeout);
+    }
+
+    #! Retrieves all values of a large multi-valued attribute using range retrieval
+    /**
+        @param dn the distinguished name of the entry
+        @param attrName the attribute name (e.g., "member")
+        @param timeout optional timeout
+        @return list of all attribute values
+
+        Active Directory limits multi-valued attributes to 1500 values per
+        response. This method handles the range retrieval protocol automatically.
+    */
+    list<auto> getRangedAttribute(string dn, string attrName, *timeout timeout) {
+        list<auto> allValues = ();
+        int low = 0;
+
+        while (True) {
+            string rangeAttr = sprintf("%s;range=%d-*", attrName, low);
+            hash<auto> result = getClient().search({
+                "base": dn,
+                "scope": LDAP_SCOPE_BASE,
+                "filter": "(objectClass=*)",
+                "attributes": rangeAttr,
+            }, timeout);
+
+            # find the entry
+            bool found = False;
+            foreach string entry_dn in (keys result) {
+                hash<auto> attrs = result{entry_dn};
+                # find the range attribute in the response
+                foreach string key in (keys attrs) {
+                    string range_pattern = "^" + attrName + ";range=";
+                    if (regex(key, range_pattern, RE_Caseless)) {
+                        auto vals = attrs{key};
+                        if (vals.typeCode() == NT_LIST) {
+                            allValues += vals;
+                        } else if (exists vals) {
+                            allValues += vals;
+                        }
+                        found = True;
+
+                        # check if this is the last page (ends with *)
+                        if (key =~ /-\*$/) {
+                            return allValues;
+                        }
+
+                        # parse the high end of the range
+                        auto range_match = regex_extract(key, ";range=\\d+-(\\d+)");
+                        if (exists range_match) {
+                            low = int(range_match[0]) + 1;
+                        } else {
+                            return allValues;
+                        }
+                        break;
+                    }
+                }
+                if (found) {
+                    break;
+                }
+            }
+
+            if (!found) {
+                # attribute not found or no range response; try without range
+                break;
+            }
+        }
+
+        return allValues;
+    }
+
+    #! Decodes an Active Directory objectGUID binary value to string format
+    /**
+        @param guid the 16-byte binary objectGUID value
+        @return the GUID string in format "{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}"
+
+        @throw LDAP-AD-ERROR if the binary value is not 16 bytes
+    */
+    static string decodeObjectGUID(binary guid) {
+        if (guid.size() != 16) {
+            throw "LDAP-AD-ERROR", sprintf("objectGUID must be 16 bytes, got %d", guid.size());
+        }
+
+        # Active Directory stores GUID in mixed-endian format:
+        # bytes 0-3: DWORD (little-endian)
+        # bytes 4-5: WORD (little-endian)
+        # bytes 6-7: WORD (little-endian)
+        # bytes 8-9: 2 bytes (big-endian)
+        # bytes 10-15: 6 bytes (big-endian)
+        int d1 = guid[3] << 24 | guid[2] << 16 | guid[1] << 8 | guid[0];
+        int d2 = guid[5] << 8 | guid[4];
+        int d3 = guid[7] << 8 | guid[6];
+        int d4 = guid[8] << 8 | guid[9];
+
+        string d5 = "";
+        for (int i = 10; i < 16; i++) {
+            d5 += sprintf("%02x", guid[i]);
+        }
+
+        return sprintf("{%08x-%04x-%04x-%04x-%s}", d1, d2, d3, d4, d5);
+    }
+
+    #! Decodes an Active Directory objectSid binary value to string format
+    /**
+        @param sid the binary objectSid value
+        @return the SID string in format "S-1-5-21-..."
+
+        @throw LDAP-AD-ERROR if the binary value is too short
+    */
+    static string decodeObjectSid(binary sid) {
+        if (sid.size() < 8) {
+            throw "LDAP-AD-ERROR", sprintf("objectSid must be at least 8 bytes, got %d", sid.size());
+        }
+
+        int revision = sid[0];
+        int sub_auth_count = sid[1];
+
+        # 6-byte identifier authority (big-endian)
+        int authority = 0;
+        for (int i = 2; i < 8; i++) {
+            authority = (authority << 8) | sid[i];
+        }
+
+        string result = sprintf("S-%d-%d", revision, authority);
+
+        # sub-authorities: 4 bytes each, little-endian
+        for (int i = 0; i < sub_auth_count; i++) {
+            int offset = 8 + i * 4;
+            if (offset + 3 >= sid.size()) {
+                break;
+            }
+            int sub_auth = sid[offset] | (sid[offset + 1] << 8) |
+                (sid[offset + 2] << 16) | (sid[offset + 3] << 24);
+            result += sprintf("-%d", sub_auth);
+        }
+
+        return result;
+    }
+
+    #! Searches for deleted objects in the AD Recycle Bin
+    /**
+        @param searchOpts search options hash
+        @param timeout optional timeout
+        @return search results including deleted objects
+
+        Requires the AD Recycle Bin feature to be enabled and appropriate permissions.
+    */
+    hash<auto> searchDeleted(hash<auto> searchOpts, *timeout timeout) {
+        list<hash<auto>> controls = ({
+            "oid": LDAP_CONTROL_SHOW_DELETED,
+            "critical": True,
+        },);
+        return getClient().search(searchOpts, timeout, controls);
+    }
+
+    #! Searches for deleted and recycled objects
+    /**
+        @param searchOpts search options hash
+        @param timeout optional timeout
+        @return search results including deleted and recycled objects
+    */
+    hash<auto> searchRecycled(hash<auto> searchOpts, *timeout timeout) {
+        list<hash<auto>> controls = ({
+            "oid": LDAP_CONTROL_SHOW_RECYCLED,
+            "critical": True,
+        },);
+        return getClient().search(searchOpts, timeout, controls);
+    }
+}

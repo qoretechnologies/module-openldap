@@ -48,20 +48,30 @@ module LdapHelper {
     - @ref LdapDn - Parses and manipulates Distinguished Names
 */
 
-#! Represents a parsed LDAP Distinguished Name
+#! Represents a single RDN component (type=value pair)
+public hashdecl RdnComponent {
+    #! The attribute type (e.g., "CN", "uid")
+    string type;
+    #! The unescaped attribute value (e.g., "Smith, John")
+    string value;
+}
+
+#! Represents a parsed LDAP Distinguished Name with full RFC 4514 support
 /**
-    @note This is a simple DN parser that handles basic DNs with comma-separated
-    components. It does NOT handle escaped characters according to RFC 4514.
-    DNs containing escaped commas (e.g., "CN=Smith\\, John,OU=Users,DC=example,DC=com")
-    will not be parsed correctly. For such cases, use the raw DN string directly
-    or implement custom parsing logic.
+    Parses Distinguished Names according to RFC 4514, handling:
+    - Escaped special characters: \\, \\+ \\" \\< \\> \\; \\= \\# \\,
+    - Hex-encoded bytes: \\XX (two hex digits)
+    - Multi-valued RDNs separated by '+'
+    - Leading/trailing space escaping
 */
 public class LdapDn {
     public {
         #! The full DN string
         string dn;
-        #! Parsed RDN components
-        list<hash<auto>> components = ();
+        #! Parsed RDN raw strings (each may contain multi-valued RDN with '+')
+        list<string> rdnStrings = ();
+        #! Parsed RDN components (first value of each RDN)
+        list<hash<RdnComponent>> components = ();
     }
 
     #! Creates a new LdapDn from a DN string
@@ -75,14 +85,13 @@ public class LdapDn {
 
     #! Returns the Relative Distinguished Name (first component)
     /**
-        @return the RDN string (e.g., "uid=testuser")
+        @return the RDN string as it appears in the DN
     */
     string getRdn() {
-        if (components.empty()) {
+        if (rdnStrings.empty()) {
             return "";
         }
-        hash<auto> rdn = components[0];
-        return sprintf("%s=%s", rdn.type, rdn.value);
+        return rdnStrings[0];
     }
 
     #! Returns the parent DN
@@ -90,20 +99,15 @@ public class LdapDn {
         @return the parent DN string
     */
     string getParent() {
-        if (components.size() < 2) {
+        if (rdnStrings.size() < 2) {
             return "";
         }
-        list<string> parts = ();
-        for (int i = 1; i < components.size(); i++) {
-            hash<auto> c = components[i];
-            parts += sprintf("%s=%s", c.type, c.value);
-        }
-        return parts.join(",");
+        return rdnStrings[1..].join(",");
     }
 
-    #! Returns the value of the RDN
+    #! Returns the value of the RDN (unescaped)
     /**
-        @return the RDN value (e.g., "testuser" from "uid=testuser")
+        @return the RDN value (e.g., "Smith, John" from "CN=Smith\\, John")
     */
     string getRdnValue() {
         if (components.empty()) {
@@ -114,7 +118,7 @@ public class LdapDn {
 
     #! Returns the type of the RDN
     /**
-        @return the RDN type (e.g., "uid" from "uid=testuser")
+        @return the RDN type (e.g., "CN" from "CN=test")
     */
     string getRdnType() {
         if (components.empty()) {
@@ -123,13 +127,37 @@ public class LdapDn {
         return components[0].type;
     }
 
+    #! Returns all parsed RDN components for the first RDN (supports multi-valued)
+    /**
+        @return list of RDN components; for "CN=a+UID=b" returns 2 components
+    */
+    list<hash<RdnComponent>> getRdnComponents() {
+        if (rdnStrings.empty()) {
+            return ();
+        }
+        return parseRdnParts(rdnStrings[0]);
+    }
+
+    #! Returns the depth (number of RDN components) of the DN
+    int depth() {
+        return rdnStrings.size();
+    }
+
     #! Checks if this DN is a child of another DN
     /**
-        @param parent the potential parent DN
-        @return True if this DN is a child of parent
+        @param parent the potential parent DN string
+        @return True if this DN is a direct or indirect child of parent
     */
     bool isChildOf(string parent) {
-        return dn.find(parent) > 0;
+        string parentDn = getParent();
+        if (parentDn == parent) {
+            return True;
+        }
+        # check if parent is a suffix of our DN
+        if (parentDn.size() > parent.size()) {
+            return parentDn.rfind(parent) == (parentDn.size() - parent.size());
+        }
+        return False;
     }
 
     #! Returns the string representation
@@ -137,19 +165,205 @@ public class LdapDn {
         return dn;
     }
 
+    #! Escapes a value for use in a DN according to RFC 4514
+    /**
+        @param value the raw value to escape
+        @return the escaped value suitable for inclusion in a DN string
+    */
+    static string escape(string value) {
+        if (value.empty()) {
+            return value;
+        }
+        string result = "";
+        for (int i = 0; i < value.size(); i++) {
+            string ch = value[i];
+            # characters that must always be escaped
+            if (ch == "," || ch == "+" || ch == "\"" || ch == "\\" || ch == "<"
+                    || ch == ">" || ch == ";" || ch == "=") {
+                result += "\\" + ch;
+            } else if (ch == "#" && i == 0) {
+                # '#' must be escaped at the start
+                result += "\\#";
+            } else if (ch == " " && (i == 0 || i == value.size() - 1)) {
+                # space must be escaped at start or end
+                result += "\\ ";
+            } else {
+                result += ch;
+            }
+        }
+        return result;
+    }
+
+    #! Unescapes an RFC 4514 escaped DN value
+    /**
+        @param value the escaped value
+        @return the unescaped value
+    */
+    static string unescape(string value) {
+        if (value.empty()) {
+            return value;
+        }
+        string result = "";
+        int i = 0;
+        while (i < value.size()) {
+            if (value[i] == "\\") {
+                i++;
+                if (i >= value.size()) {
+                    break;
+                }
+                # check for hex pair
+                if (i + 1 < value.size() && LdapDn::isHexChar(value[i])
+                        && LdapDn::isHexChar(value[i + 1])) {
+                    int byte_val = LdapDn::hexToInt(value[i]) * 16
+                        + LdapDn::hexToInt(value[i + 1]);
+                    result += chr(byte_val);
+                    i += 2;
+                } else {
+                    # escaped special character
+                    result += value[i];
+                    i++;
+                }
+            } else {
+                result += value[i];
+                i++;
+            }
+        }
+        return result;
+    }
+
+    #! Returns True if the character is a hex digit
+    private static bool isHexChar(string ch) {
+        return ch =~ /^[0-9a-fA-F]$/;
+    }
+
+    #! Converts a hex character to its integer value
+    private static int hexToInt(string ch) {
+        if (ch >= "0" && ch <= "9") {
+            return ord(ch) - ord("0");
+        }
+        if (ch >= "a" && ch <= "f") {
+            return ord(ch) - ord("a") + 10;
+        }
+        if (ch >= "A" && ch <= "F") {
+            return ord(ch) - ord("A") + 10;
+        }
+        return 0;
+    }
+
+    #! Parse the DN string into RDN strings, respecting escaping
     private parse() {
-        # Simple DN parser - handles basic DNs
-        list<string> parts = dn.split(",");
-        for (int i = 0; i < parts.size(); i++) {
-            string part = trim(parts[i]);
-            int eq = part.find("=");
-            if (eq > 0) {
-                components += {
-                    "type": trim(part.substr(0, eq)),
-                    "value": trim(part.substr(eq + 1)),
+        if (dn.empty()) {
+            return;
+        }
+
+        # State machine: walk through DN, split on unescaped commas
+        string current = "";
+        int i = 0;
+        while (i < dn.size()) {
+            if (dn[i] == "\\") {
+                # escaped character: consume the backslash and the next char(s)
+                current += "\\";
+                i++;
+                if (i < dn.size()) {
+                    # check for hex pair
+                    if (i + 1 < dn.size() && LdapDn::isHexChar(dn[i])
+                            && LdapDn::isHexChar(dn[i + 1])) {
+                        current += dn[i];
+                        current += dn[i + 1];
+                        i += 2;
+                    } else {
+                        current += dn[i];
+                        i++;
+                    }
+                }
+            } else if (dn[i] == ",") {
+                # unescaped comma: end of current RDN
+                addRdnString(current);
+                current = "";
+                i++;
+            } else {
+                current += dn[i];
+                i++;
+            }
+        }
+        # add the last component
+        if (!current.empty()) {
+            addRdnString(current);
+        }
+    }
+
+    #! Add an RDN string and parse its first type=value component
+    private addRdnString(string rdn) {
+        string trimmed = trim(rdn);
+        rdnStrings += trimmed;
+
+        # parse first type=value (before any unescaped '+')
+        list<hash<RdnComponent>> parts = parseRdnParts(trimmed);
+        if (!parts.empty()) {
+            components += parts[0];
+        }
+    }
+
+    #! Parse an RDN string into its type=value parts (handles multi-valued RDNs)
+    private static list<hash<RdnComponent>> parseRdnParts(string rdn) {
+        list<hash<RdnComponent>> result = ();
+        # split on unescaped '+' for multi-valued RDNs
+        list<string> segments = splitOnUnescaped(rdn, "+");
+        for (int i = 0; i < segments.size(); i++) {
+            string seg = trim(segments[i]);
+            # find first unescaped '='
+            int eq_pos = findUnescaped(seg, "=");
+            if (eq_pos > 0) {
+                string attr_type = trim(seg.substr(0, eq_pos));
+                string raw_value = trim(seg.substr(eq_pos + 1));
+                result += <RdnComponent>{
+                    "type": attr_type,
+                    "value": LdapDn::unescape(raw_value),
                 };
             }
         }
+        return result;
+    }
+
+    #! Split a string on an unescaped delimiter character
+    private static list<string> splitOnUnescaped(string str, string delim) {
+        list<string> result = ();
+        string current = "";
+        int i = 0;
+        while (i < str.size()) {
+            if (str[i] == "\\") {
+                current += "\\";
+                i++;
+                if (i < str.size()) {
+                    current += str[i];
+                    i++;
+                }
+            } else if (str[i] == delim) {
+                result += current;
+                current = "";
+                i++;
+            } else {
+                current += str[i];
+                i++;
+            }
+        }
+        result += current;
+        return result;
+    }
+
+    #! Find the position of the first unescaped occurrence of a character
+    private static int findUnescaped(string str, string ch) {
+        int i = 0;
+        while (i < str.size()) {
+            if (str[i] == "\\") {
+                i += 2;  # skip escaped char
+            } else if (str[i] == ch) {
+                return i;
+            } else {
+                i++;
+            }
+        }
+        return -1;
     }
 }
 
@@ -449,6 +663,21 @@ public class LdapClientHelper {
         }
     }
 
+    #! Performs a Who Am I? extended operation (RFC 4532)
+    /**
+        @param timeout optional timeout
+        @return the authorization identity string (e.g., "dn:cn=admin,dc=example,dc=com")
+
+        @throw LDAP-ERROR if the server does not support the Who Am I? extended operation
+    */
+    string whoAmI(*timeout timeout) {
+        hash<auto> result = client.extendedOp(LDAP_EXOP_WHO_AM_I, NOTHING, timeout);
+        if (exists result.value) {
+            return result.value.toString("UTF-8");
+        }
+        return "";
+    }
+
     #! Returns the wrapped LdapClient
     LdapClient getClient() {
         return client;
@@ -457,5 +686,439 @@ public class LdapClientHelper {
     #! Delegate method calls to the underlying client
     auto methodGate(string method) {
         return call_object_method_args(client, method, argv);
+    }
+}
+
+#! Represents a parsed LDAP URL (RFC 4516)
+/**
+    Parses URLs of the form: ldap[s]://host[:port]/base?attributes?scope?filter?extensions
+*/
+public class LdapUrl {
+    public {
+        #! URL scheme ("ldap" or "ldaps")
+        string scheme = "ldap";
+        #! Server hostname
+        string host;
+        #! Server port (NOTHING for default)
+        *int port;
+        #! Base DN for searches
+        *string baseDn;
+        #! List of attributes to return
+        *list<string> attributes;
+        #! Search scope ("base", "one", "sub", "children")
+        *string scope;
+        #! Search filter
+        *string filter;
+        #! Extensions hash
+        *hash<string, string> extensions;
+    }
+
+    #! Creates a new LdapUrl by parsing a URL string
+    /**
+        @param url the LDAP URL to parse
+
+        @throw LDAP-URL-ERROR invalid URL format
+    */
+    constructor(string url) {
+        parse(url);
+    }
+
+    #! Reconstructs the URL string
+    string toString() {
+        string result = scheme + "://";
+        if (exists host) {
+            result += host;
+        }
+        if (exists port) {
+            result += ":" + string(port);
+        }
+        result += "/";
+        if (exists baseDn) {
+            result += baseDn;
+        }
+        if (exists attributes || exists scope || exists filter) {
+            result += "?";
+            if (exists attributes) {
+                result += attributes.join(",");
+            }
+            if (exists scope || exists filter) {
+                result += "?";
+                if (exists scope) {
+                    result += scope;
+                }
+                if (exists filter) {
+                    result += "?" + filter;
+                }
+            }
+        }
+        return result;
+    }
+
+    #! Builds a search options hash from this URL
+    /**
+        @return a hash suitable for LdapClient::search()
+    */
+    hash<auto> toSearchOpts() {
+        hash<auto> opts;
+        if (exists baseDn) {
+            opts.base = baseDn;
+        }
+        if (exists filter) {
+            opts.filter = filter;
+        } else {
+            opts.filter = "(objectClass=*)";
+        }
+        if (exists attributes) {
+            opts.attributes = attributes;
+        }
+        if (exists scope) {
+            switch (scope) {
+                case "base": opts.scope = LDAP_SCOPE_BASE; break;
+                case "one": opts.scope = LDAP_SCOPE_ONELEVEL; break;
+                case "sub": opts.scope = LDAP_SCOPE_SUBTREE; break;
+                case "children": opts.scope = LDAP_SCOPE_CHILDREN; break;
+            }
+        }
+        return opts;
+    }
+
+    #! Returns the server URI (scheme://host[:port])
+    string getServerUri() {
+        string result = scheme + "://" + host;
+        if (exists port) {
+            result += ":" + string(port);
+        }
+        return result;
+    }
+
+    private parse(string url) {
+        # match scheme
+        if (url =~ /^ldaps:\/\//i) {
+            scheme = "ldaps";
+            url = url.substr(8);
+        } else if (url =~ /^ldap:\/\//i) {
+            scheme = "ldap";
+            url = url.substr(7);
+        } else {
+            throw "LDAP-URL-ERROR", sprintf("invalid LDAP URL scheme: %y", url);
+        }
+
+        # split host/path at first '/'
+        int slash_pos = url.find("/");
+        string host_part;
+        string path_part = "";
+        if (slash_pos >= 0) {
+            host_part = url.substr(0, slash_pos);
+            path_part = url.substr(slash_pos + 1);
+        } else {
+            host_part = url;
+        }
+
+        # parse host[:port]
+        if (host_part =~ /^\[/) {
+            # IPv6 address
+            int bracket = host_part.find("]");
+            if (bracket > 0) {
+                host = host_part.substr(1, bracket - 1);
+                if (bracket + 1 < host_part.size() && host_part[bracket + 1] == ":") {
+                    port = int(host_part.substr(bracket + 2));
+                }
+            }
+        } else {
+            int colon = host_part.rfind(":");
+            if (colon > 0) {
+                host = host_part.substr(0, colon);
+                port = int(host_part.substr(colon + 1));
+            } else {
+                host = host_part;
+            }
+        }
+
+        # parse path: base?attributes?scope?filter?extensions
+        if (path_part.empty()) {
+            return;
+        }
+
+        list<string> parts = path_part.split("?");
+        if (parts.size() > 0 && !parts[0].empty()) {
+            baseDn = parts[0];
+        }
+        if (parts.size() > 1 && !parts[1].empty()) {
+            attributes = parts[1].split(",");
+        }
+        if (parts.size() > 2 && !parts[2].empty()) {
+            scope = parts[2].lwr();
+        }
+        if (parts.size() > 3 && !parts[3].empty()) {
+            filter = parts[3];
+        }
+        if (parts.size() > 4 && !parts[4].empty()) {
+            extensions = {};
+            list<string> ext_parts = parts[4].split(",");
+            foreach string ext in (ext_parts) {
+                int eq = ext.find("=");
+                if (eq > 0) {
+                    extensions{ext.substr(0, eq)} = ext.substr(eq + 1);
+                } else {
+                    extensions{ext} = "";
+                }
+            }
+        }
+    }
+}
+
+#! Represents an LDAP object class schema definition
+public hashdecl LdapObjectClassInfo {
+    #! Object class OID
+    string oid;
+    #! Object class name
+    string name;
+    #! Description
+    *string description;
+    #! Superior (parent) object class
+    *string superior;
+    #! Kind: "STRUCTURAL", "AUXILIARY", or "ABSTRACT"
+    string kind = "STRUCTURAL";
+    #! Required attributes
+    list<string> must = ();
+    #! Optional attributes
+    list<string> may = ();
+}
+
+#! Represents an LDAP attribute type schema definition
+public hashdecl LdapAttributeTypeInfo {
+    #! Attribute type OID
+    string oid;
+    #! Attribute type name
+    string name;
+    #! Description
+    *string description;
+    #! Syntax OID
+    *string syntax;
+    #! Whether the attribute is single-valued
+    bool singleValue = False;
+    #! Whether the attribute is not user-modifiable
+    bool noUserMod = False;
+    #! Superior attribute type
+    *string superior;
+    #! Equality matching rule
+    *string equality;
+    #! Ordering matching rule
+    *string ordering;
+    #! Substring matching rule
+    *string substr;
+}
+
+#! Provides LDAP schema introspection by reading the subschemaSubentry
+public class LdapSchema {
+    private {
+        hash<string, hash<LdapObjectClassInfo>> objectClasses;
+        hash<string, hash<LdapAttributeTypeInfo>> attributeTypes;
+    }
+
+    #! Loads the schema from the LDAP server
+    /**
+        @param client the LdapClient to use
+        @param timeout optional timeout
+    */
+    constructor(LdapClient client, *timeout timeout) {
+        # Step 1: get subschemaSubentry DN from root DSE
+        hash<auto> rootDse = client.search({
+            "base": "",
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+            "attributes": "subschemaSubentry",
+        }, timeout);
+
+        string schemaDn = "cn=Subschema";  # fallback
+        foreach string dn in (keys rootDse) {
+            auto val = rootDse{dn}.subschemaSubentry ?? rootDse{dn}.subschemasubentry;
+            if (exists val) {
+                schemaDn = val.typeCode() == NT_LIST ? val[0] : val;
+                break;
+            }
+        }
+
+        # Step 2: read schema attributes
+        hash<auto> schemaResult = client.search({
+            "base": schemaDn,
+            "filter": "(objectClass=*)",
+            "scope": LDAP_SCOPE_BASE,
+            "attributes": ("objectClasses", "attributeTypes"),
+        }, timeout);
+
+        foreach string dn in (keys schemaResult) {
+            hash<auto> attrs = schemaResult{dn};
+            # parse objectClasses
+            auto ocs = attrs.objectClasses ?? attrs.objectclasses;
+            if (exists ocs) {
+                list<auto> oc_list = ocs.typeCode() == NT_LIST ? ocs : (ocs,);
+                foreach auto oc_str in (oc_list) {
+                    hash<LdapObjectClassInfo> oc = parseObjectClass(string(oc_str));
+                    if (exists oc.name) {
+                        objectClasses{oc.name.lwr()} = oc;
+                    }
+                }
+            }
+            # parse attributeTypes
+            auto ats = attrs.attributeTypes ?? attrs.attributetypes;
+            if (exists ats) {
+                list<auto> at_list = ats.typeCode() == NT_LIST ? ats : (ats,);
+                foreach auto at_str in (at_list) {
+                    hash<LdapAttributeTypeInfo> at = parseAttributeType(string(at_str));
+                    if (exists at.name) {
+                        attributeTypes{at.name.lwr()} = at;
+                    }
+                }
+            }
+        }
+    }
+
+    #! Gets an object class by name (case-insensitive)
+    *hash<LdapObjectClassInfo> getObjectClass(string name) {
+        return objectClasses{name.lwr()};
+    }
+
+    #! Gets an attribute type by name (case-insensitive)
+    *hash<LdapAttributeTypeInfo> getAttributeType(string name) {
+        return attributeTypes{name.lwr()};
+    }
+
+    #! Returns all object class names
+    list<string> getObjectClassNames() {
+        return map $1.name, objectClasses.iterator();
+    }
+
+    #! Returns all attribute type names
+    list<string> getAttributeTypeNames() {
+        return map $1.name, attributeTypes.iterator();
+    }
+
+    #! Returns required attributes for an object class
+    list<string> getRequiredAttributes(string objectClass) {
+        *hash<LdapObjectClassInfo> oc = getObjectClass(objectClass);
+        if (!exists oc) {
+            return ();
+        }
+        return oc.must;
+    }
+
+    #! Returns optional attributes for an object class
+    list<string> getOptionalAttributes(string objectClass) {
+        *hash<LdapObjectClassInfo> oc = getObjectClass(objectClass);
+        if (!exists oc) {
+            return ();
+        }
+        return oc.may;
+    }
+
+    #! Checks if an attribute has binary syntax
+    /**
+        Binary syntax OIDs: 1.3.6.1.4.1.1466.115.121.1.5 (Binary),
+        1.3.6.1.4.1.1466.115.121.1.28 (JPEG), 1.3.6.1.4.1.1466.115.121.1.8 (Certificate)
+    */
+    bool isBinaryAttribute(string name) {
+        *hash<LdapAttributeTypeInfo> at = getAttributeType(name);
+        if (!exists at || !exists at.syntax) {
+            return False;
+        }
+        # Known binary syntax OIDs
+        return at.syntax == "1.3.6.1.4.1.1466.115.121.1.5"    # Binary
+            || at.syntax == "1.3.6.1.4.1.1466.115.121.1.28"   # JPEG
+            || at.syntax == "1.3.6.1.4.1.1466.115.121.1.8"    # Certificate
+            || at.syntax == "1.3.6.1.4.1.1466.115.121.1.10";  # Certificate List
+    }
+
+    #! Parse an RFC 4512 objectClass definition string
+    private static hash<LdapObjectClassInfo> parseObjectClass(string def) {
+        hash<LdapObjectClassInfo> oc;
+        # extract OID
+        *list<*string> oid_match = regex_extract(def, "\\(\\s*([0-9.]+)");
+        if (exists oid_match) {
+            oc.oid = oid_match[0];
+        }
+        # extract NAME
+        *list<*string> name_match = regex_extract(def, "NAME\\s+'([^']+)'");
+        if (exists name_match) {
+            oc.name = name_match[0];
+        }
+        # extract DESC
+        *list<*string> desc_match = regex_extract(def, "DESC\\s+'([^']*)'");
+        if (exists desc_match) {
+            oc.description = desc_match[0];
+        }
+        # extract SUP
+        *list<*string> sup_match = regex_extract(def, "SUP\\s+(\\S+)");
+        if (exists sup_match) {
+            oc.superior = sup_match[0];
+        }
+        # extract kind
+        if (def =~ /ABSTRACT/) {
+            oc.kind = "ABSTRACT";
+        } else if (def =~ /AUXILIARY/) {
+            oc.kind = "AUXILIARY";
+        } else {
+            oc.kind = "STRUCTURAL";
+        }
+        # extract MUST
+        oc.must = extractAttrList(def, "MUST");
+        # extract MAY
+        oc.may = extractAttrList(def, "MAY");
+        return oc;
+    }
+
+    #! Parse an RFC 4512 attributeType definition string
+    private static hash<LdapAttributeTypeInfo> parseAttributeType(string def) {
+        hash<LdapAttributeTypeInfo> at;
+        *list<*string> oid_match = regex_extract(def, "\\(\\s*([0-9.]+)");
+        if (exists oid_match) {
+            at.oid = oid_match[0];
+        }
+        *list<*string> name_match = regex_extract(def, "NAME\\s+'([^']+)'");
+        if (exists name_match) {
+            at.name = name_match[0];
+        }
+        *list<*string> desc_match = regex_extract(def, "DESC\\s+'([^']*)'");
+        if (exists desc_match) {
+            at.description = desc_match[0];
+        }
+        *list<*string> syntax_match = regex_extract(def, "SYNTAX\\s+([0-9.]+)");
+        if (exists syntax_match) {
+            at.syntax = syntax_match[0];
+        }
+        *list<*string> sup_match = regex_extract(def, "SUP\\s+(\\S+)");
+        if (exists sup_match) {
+            at.superior = sup_match[0];
+        }
+        *list<*string> eq_match = regex_extract(def, "EQUALITY\\s+(\\S+)");
+        if (exists eq_match) {
+            at.equality = eq_match[0];
+        }
+        *list<*string> ord_match = regex_extract(def, "ORDERING\\s+(\\S+)");
+        if (exists ord_match) {
+            at.ordering = ord_match[0];
+        }
+        *list<*string> sub_match = regex_extract(def, "SUBSTR\\s+(\\S+)");
+        if (exists sub_match) {
+            at.substr = sub_match[0];
+        }
+        at.singleValue = def =~ /SINGLE-VALUE/;
+        at.noUserMod = def =~ /NO-USER-MODIFICATION/;
+        return at;
+    }
+
+    #! Extract an attribute list (MUST or MAY) from a schema definition
+    private static list<string> extractAttrList(string def, string keyword) {
+        # Try "KEYWORD ( attr1 $ attr2 )" format
+        *list<*string> paren_match = regex_extract(def, keyword + "\\s+\\(([^)]+)\\)");
+        if (exists paren_match) {
+            return map trim($1), paren_match[0].split("$");
+        }
+        # Try "KEYWORD attr" format (single attr)
+        *list<*string> single_match = regex_extract(def, keyword + "\\s+(\\S+)");
+        if (exists single_match && single_match[0] != "(") {
+            return (single_match[0],);
+        }
+        return ();
     }
 }

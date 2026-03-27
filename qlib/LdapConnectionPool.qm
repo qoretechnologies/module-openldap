@@ -86,6 +86,12 @@ public class LdapConnectionPool {
         const DefaultIdleTimeout = 300;
         #! Default wait timeout for getting a connection
         const DefaultWaitTimeout = 30;
+        #! Default reconnect delay in seconds
+        const DefaultReconnectDelay = 2;
+        #! Default max reconnect retries (-1 for infinite)
+        const DefaultMaxReconnectRetries = 3;
+        #! Default health check timeout in seconds
+        const DefaultHealthCheckTimeout = 5;
     }
 
     private {
@@ -95,6 +101,14 @@ public class LdapConnectionPool {
         hash<auto> opts;
         #! Pool options
         hash<auto> poolOpts;
+        #! Enable health checks on connection retrieval
+        bool healthCheck = True;
+        #! Enable auto-reconnect on failures
+        bool reconnect = True;
+        #! Reconnect delay
+        int reconnectDelay;
+        #! Max reconnect retries
+        int maxReconnectRetries;
 
         #! Available connections
         list<hash<auto>> available = ();
@@ -123,6 +137,11 @@ public class LdapConnectionPool {
         - \c max_connections: maximum number of connections (default: 10)
         - \c idle_timeout: time before idle connections are closed (default: 300s)
         - \c wait_timeout: max time to wait for a connection (default: 30s)
+        - \c health_check: if True (default), validate connections with a rootDSE search before returning them
+        - \c health_check_timeout: timeout for health check in seconds (default: 5)
+        - \c reconnect: if True (default), enable automatic reconnection on failures
+        - \c reconnect_delay: delay between reconnect attempts in seconds (default: 2)
+        - \c max_reconnect_retries: maximum reconnect attempts; -1 for infinite (default: 3)
     */
     constructor(string uri, *hash<auto> opts, *hash<auto> poolOpts) {
         self.uri = uri;
@@ -153,6 +172,12 @@ public class LdapConnectionPool {
         if (self.poolOpts.min_connections > self.poolOpts.max_connections) {
             throw "LDAP-POOL-ERROR", "min_connections cannot exceed max_connections";
         }
+
+        # Reconnect and health check options
+        healthCheck = self.poolOpts.health_check ?? True;
+        reconnect = self.poolOpts.reconnect ?? True;
+        reconnectDelay = int(self.poolOpts.reconnect_delay ?? DefaultReconnectDelay);
+        maxReconnectRetries = int(self.poolOpts.max_reconnect_retries ?? DefaultMaxReconnectRetries);
 
         # Pre-create minimum connections
         for (int i = 0; i < self.poolOpts.min_connections; i++) {
@@ -188,10 +213,37 @@ public class LdapConnectionPool {
             # Try to get an available connection
             if (available.size() > 0) {
                 hash<auto> connInfo = pop available;
+                LdapClient conn = connInfo.connection;
+
+                # Health check if enabled
+                if (healthCheck) {
+                    int hc_timeout = int(poolOpts.health_check_timeout ?? DefaultHealthCheckTimeout);
+                    mutex.unlock();
+                    bool healthy;
+                    try {
+                        conn.search({
+                            "base": "",
+                            "filter": "(objectClass=*)",
+                            "scope": LDAP_SCOPE_BASE,
+                            "attributes": "namingContexts",
+                        }, seconds(hc_timeout));
+                        healthy = True;
+                    } catch () {
+                        healthy = False;
+                    }
+                    mutex.lock();
+
+                    if (!healthy) {
+                        # connection is stale, discard and try again
+                        totalCreated--;
+                        continue;
+                    }
+                }
+
                 inUse++;
-                string connId = getConnectionId(connInfo.connection);
+                string connId = getConnectionId(conn);
                 activeConnections{connId} = True;
-                return connInfo.connection;
+                return conn;
             }
 
             # Try to create a new connection if under limit
@@ -274,6 +326,92 @@ public class LdapConnectionPool {
         LdapClient conn = get();
         on_exit release(conn);
         return callback(conn);
+    }
+
+    #! Executes a callback with automatic retry on connection errors
+    /**
+        @param callback the callback to execute with the connection
+        @param timeout optional timeout override for connection acquisition
+        @return the return value of the callback
+
+        If the callback fails with a connection error and reconnect is enabled,
+        the stale connection is discarded and the operation is retried with a new
+        connection, up to max_reconnect_retries times.
+    */
+    auto withConnectionRetry(code callback, *timeout timeout) {
+        int attempts = 0;
+        while (True) {
+            LdapClient conn = get(timeout);
+            try {
+                auto result = callback(conn);
+                release(conn);
+                return result;
+            } catch (hash<ExceptionInfo> ex) {
+                if (reconnect && isConnectionError(ex)
+                        && (maxReconnectRetries < 0 || attempts < maxReconnectRetries)) {
+                    attempts++;
+                    # discard the stale connection instead of releasing it
+                    discardConnection(conn);
+                    if (reconnectDelay > 0) {
+                        # use condition variable for interruptible wait on shutdown
+                        mutex.lock();
+                        on_exit mutex.unlock();
+                        if (!shutdown) {
+                            cond.wait(mutex, seconds(reconnectDelay));
+                        }
+                        if (shutdown) {
+                            throw "LDAP-POOL-SHUTDOWN", "connection pool shut down during reconnect wait";
+                        }
+                    }
+                    continue;
+                }
+                # not a connection error or retries exhausted; release and rethrow
+                try {
+                    release(conn);
+                } catch () {
+                    # ignore release errors for already-discarded connections
+                }
+                rethrow;
+            }
+        }
+    }
+
+    #! Discards a connection without returning it to the pool
+    /**
+        @param conn the connection to discard
+
+        Use this when a connection is known to be broken. The pool's total
+        count is decremented so new connections can be created.
+    */
+    discardConnection(LdapClient conn) {
+        mutex.lock();
+        on_exit mutex.unlock();
+
+        string connId = getConnectionId(conn);
+        if (activeConnections.hasKey(connId)) {
+            remove activeConnections{connId};
+            inUse--;
+            totalCreated--;
+            cond.signal();
+        }
+    }
+
+    #! Checks if an exception indicates a connection error
+    /**
+        @param ex the exception info
+        @return True if the error indicates a lost or broken connection
+    */
+    static bool isConnectionError(hash<ExceptionInfo> ex) {
+        if (ex.err == "LDAP-ERROR" || ex.err == "LDAP-NO-CONTEXT") {
+            string desc = string(ex.desc).lwr();
+            return desc =~ /server.*down/
+                || desc =~ /can't contact/
+                || desc =~ /timeout/
+                || desc =~ /connection.*reset/
+                || desc =~ /not connected/
+                || desc =~ /unbound/;
+        }
+        return False;
     }
 
     #! Returns pool statistics

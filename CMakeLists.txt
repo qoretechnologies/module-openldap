@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.5...3.31)
 
 project(qore-openldap-module)
 
-set (VERSION_MAJOR 1)
-set (VERSION_MINOR 3)
+set (VERSION_MAJOR 2)
+set (VERSION_MINOR 0)
 set (VERSION_PATCH 0)
 
 if (${VERSION_PATCH})
@@ -26,6 +26,16 @@ if (APPLE)
 endif()
 
 find_package(OpenLDAP REQUIRED)
+
+# Find Cyrus SASL (optional, for SASL authentication support)
+find_path(SASL2_INCLUDE_DIR sasl/sasl.h)
+find_library(SASL2_LIBRARY NAMES sasl2)
+if(SASL2_INCLUDE_DIR AND SASL2_LIBRARY)
+    message(STATUS "Found Cyrus SASL: ${SASL2_LIBRARY}")
+    set(HAVE_SASL2 TRUE)
+else()
+    message(STATUS "Cyrus SASL not found - SASL bind support requires sasl/sasl.h header")
+endif()
 
 if (DEFINED ENV{OpenLDAP_LIB_R})
     set(OpenLDAP_LIB_R $ENV{OpenLDAP_LIB_R})
@@ -57,6 +67,9 @@ qore_wrap_qpp_value(QPP_CPP_SRC METALIST QPP_META_SRC ${QPP_SRC})
 
 add_library(${module_name} MODULE ${QPP_CPP_SRC} ${CPP_SRC})
 target_include_directories(${module_name} PUBLIC ${OpenLDAP_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/src)
+if(HAVE_SASL2)
+    target_include_directories(${module_name} PUBLIC ${SASL2_INCLUDE_DIR})
+endif()
 
 if (DEFINED ENV{DOXYGEN_EXECUTABLE})
     set(DOXYGEN_EXECUTABLE $ENV{DOXYGEN_EXECUTABLE})
@@ -67,6 +80,9 @@ qore_external_binary_module(${module_name} "${PROJECT_VERSION}" ${OpenLDAP_LIB_R
 # Install user modules
 qore_external_user_module("qlib/LdapHelper.qm" "")
 qore_external_user_module("qlib/LdapConnectionPool.qm" "")
+qore_external_user_module("qlib/LdapAsync.qm" "")
+qore_external_user_module("qlib/LdifHelper.qm" "")
+qore_external_user_module("qlib/LdapActiveDirectory.qm" "")
 
 # Install bin scripts
 install(PROGRAMS

@@ -1,0 +1,486 @@
+# -*- mode: qore; indent-tabs-mode: nil -*-
+#! @file LdifHelper.qm LDIF import/export support for OpenLDAP module
+
+/*  LdifHelper.qm Copyright 2026 Qore Technologies, s.r.o.
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+*/
+
+%modern
+
+module LdifHelper {
+    version = "1.0";
+    desc = "LDIF (RFC 2849) import/export support for LDAP entries";
+    author = "David Nichols <david@qore.org>";
+    url = "https://qore.org";
+    license = "MIT";
+}
+
+/** @mainpage LdifHelper Module
+
+    @section ldifhelperintro Introduction
+
+    This module provides classes for reading and writing LDIF (LDAP Data
+    Interchange Format) files as defined in RFC 2849.
+*/
+
+#! Represents an LDIF entry (content record)
+public hashdecl LdifEntryInfo {
+    #! The Distinguished Name
+    string dn;
+    #! The entry's attributes (name -> string or list<string>)
+    hash<auto> attributes;
+}
+
+#! Represents an LDIF change record
+public hashdecl LdifChangeInfo {
+    #! The Distinguished Name
+    string dn;
+    #! The changetype: "add", "delete", "modify", "modrdn"
+    string changetype;
+    #! Attributes for add operations
+    *hash<auto> attributes;
+    #! Modifications for modify operations (list of hashes with mod/attr/value keys)
+    *list<auto> modifications;
+    #! New RDN for modrdn
+    *string newrdn;
+    #! Whether to delete old RDN
+    *bool deleteoldrdn;
+    #! New superior DN
+    *string newsuperior;
+}
+
+#! Reads LDIF format data from a file or input stream
+public class LdifReader {
+    private {
+        list<string> lines;
+        int pos = 0;
+    }
+
+    #! Creates a reader from a file path
+    /**
+        @param filename the path to the LDIF file
+    */
+    constructor(string filename) {
+        string content = ReadOnlyFile::readTextFile(filename);
+        lines = content.split("\n");
+    }
+
+    #! Creates a reader from a list of lines
+    /**
+        @param input the lines to parse
+    */
+    constructor(list<string> input) {
+        lines = input;
+    }
+
+    #! Reads the next LDIF entry (content record)
+    /**
+        @return the entry info or NOTHING at end of input
+    */
+    *hash<LdifEntryInfo> readEntry() {
+        list<string> block = readBlock();
+        if (block.empty()) {
+            return NOTHING;
+        }
+        return parseEntry(block);
+    }
+
+    #! Reads all entries
+    list<hash<LdifEntryInfo>> readAll() {
+        list<hash<LdifEntryInfo>> result = ();
+        while (True) {
+            *hash<LdifEntryInfo> entry = readEntry();
+            if (!exists entry) {
+                break;
+            }
+            result += entry;
+        }
+        return result;
+    }
+
+    #! Reads the next LDIF change record
+    *hash<LdifChangeInfo> readChange() {
+        list<string> block = readBlock();
+        if (block.empty()) {
+            return NOTHING;
+        }
+        return parseChange(block);
+    }
+
+    #! Read a block of lines (unfold continuation lines, skip comments)
+    private list<string> readBlock() {
+        list<string> block = ();
+        bool in_block = False;
+
+        while (pos < lines.size()) {
+            string line = lines[pos];
+            pos++;
+
+            # remove trailing CR
+            if (line.size() > 0 && line[line.size() - 1] == "\r") {
+                line = line.substr(0, line.size() - 1);
+            }
+
+            # skip comments
+            if (line =~ /^#/) {
+                continue;
+            }
+
+            # empty line ends a block
+            if (line.empty()) {
+                if (in_block) {
+                    break;
+                }
+                continue;
+            }
+
+            # line folding: continuation line starts with single space
+            if (line[0] == " " && !block.empty()) {
+                block[block.size() - 1] += line.substr(1);
+            } else {
+                block += line;
+                in_block = True;
+            }
+        }
+
+        return block;
+    }
+
+    #! Parse a block of lines into an LDIF entry
+    private *hash<LdifEntryInfo> parseEntry(list<string> block) {
+        if (block.empty()) {
+            return NOTHING;
+        }
+
+        *string dn;
+        hash<auto> attrs;
+
+        foreach string line in (block) {
+            auto parsed = parseLine(line);
+            if (!exists parsed) {
+                continue;
+            }
+            string name = parsed.name;
+            auto value = parsed.value;
+
+            if (name.lwr() == "dn") {
+                dn = string(value);
+            } else if (name.lwr() == "changetype") {
+                # skip changetype in entry mode
+                continue;
+            } else {
+                # add to attributes (handle multi-valued)
+                if (attrs.hasKey(name)) {
+                    if (attrs{name}.typeCode() == NT_LIST) {
+                        attrs{name} += value;
+                    } else {
+                        attrs{name} = (attrs{name}, value);
+                    }
+                } else {
+                    attrs{name} = value;
+                }
+            }
+        }
+
+        if (!exists dn) {
+            return NOTHING;
+        }
+        return <LdifEntryInfo>{
+            "dn": dn,
+            "attributes": attrs,
+        };
+    }
+
+    #! Parse a block of lines into an LDIF change record
+    private *hash<LdifChangeInfo> parseChange(list<string> block) {
+        if (block.empty()) {
+            return NOTHING;
+        }
+
+        hash<LdifChangeInfo> change;
+        hash<auto> attrs;
+        list<auto> mods = ();
+
+        int i = 0;
+        # parse dn
+        while (i < block.size()) {
+            auto parsed = parseLine(block[i]);
+            i++;
+            if (exists parsed && parsed.name.lwr() == "dn") {
+                change.dn = string(parsed.value);
+                break;
+            }
+        }
+        if (!exists change.dn) {
+            return NOTHING;
+        }
+
+        # parse changetype
+        while (i < block.size()) {
+            auto parsed = parseLine(block[i]);
+            i++;
+            if (exists parsed && parsed.name.lwr() == "changetype") {
+                change.changetype = string(parsed.value);
+                break;
+            }
+        }
+        if (!exists change.changetype) {
+            change.changetype = "add";  # default
+        }
+
+        # parse remaining based on changetype
+        switch (change.changetype) {
+            case "add":
+                while (i < block.size()) {
+                    auto parsed = parseLine(block[i]);
+                    i++;
+                    if (exists parsed) {
+                        string name = parsed.name;
+                        if (attrs.hasKey(name)) {
+                            if (attrs{name}.typeCode() == NT_LIST) {
+                                attrs{name} += parsed.value;
+                            } else {
+                                attrs{name} = (attrs{name}, parsed.value);
+                            }
+                        } else {
+                            attrs{name} = parsed.value;
+                        }
+                    }
+                }
+                change.attributes = attrs;
+                break;
+
+            case "modify":
+                while (i < block.size()) {
+                    string line = block[i];
+                    i++;
+                    if (line == "-") {
+                        continue;
+                    }
+                    auto parsed = parseLine(line);
+                    if (exists parsed) {
+                        string action = parsed.name;  # add, delete, replace
+                        string attr_name = string(parsed.value);
+                        list<auto> values = ();
+                        while (i < block.size() && block[i] != "-") {
+                            auto val_parsed = parseLine(block[i]);
+                            i++;
+                            if (exists val_parsed) {
+                                values += val_parsed.value;
+                            }
+                        }
+                        hash<auto> mod = {
+                            "mod": action,
+                            "attr": attr_name,
+                        };
+                        if (!values.empty()) {
+                            mod.value = values.size() == 1 ? values[0] : values;
+                        }
+                        mods += mod;
+                    }
+                }
+                change.modifications = mods;
+                break;
+
+            case "modrdn":
+                while (i < block.size()) {
+                    auto parsed = parseLine(block[i]);
+                    i++;
+                    if (exists parsed) {
+                        switch (parsed.name.lwr()) {
+                            case "newrdn": change.newrdn = string(parsed.value); break;
+                            case "deleteoldrdn": change.deleteoldrdn = boolean(parsed.value); break;
+                            case "newsuperior": change.newsuperior = string(parsed.value); break;
+                        }
+                    }
+                }
+                break;
+
+            case "delete":
+                # no additional data needed
+                break;
+        }
+
+        return change;
+    }
+
+    #! Parse a single LDIF line into name/value
+    private *hash<auto> parseLine(string line) {
+        # format: name:: base64value  or  name: value
+        int colon = line.find(":");
+        if (colon < 0) {
+            return NOTHING;
+        }
+        string name = line.substr(0, colon);
+        auto value;
+        if (colon + 1 < line.size() && line[colon + 1] == ":") {
+            # base64 encoded value — decode to string (LDIF base64 is UTF-8 text)
+            string b64 = trim(line.substr(colon + 2));
+            binary decoded = parse_base64_string(b64);
+            value = decoded.toString("UTF-8");
+        } else {
+            value = trim(line.substr(colon + 1));
+        }
+        return {"name": name, "value": value};
+    }
+}
+
+#! Writes LDIF format data to a file or output
+public class LdifWriter {
+    private {
+        File output;
+        int lineWidth = 76;
+    }
+
+    #! Creates a writer for a file path
+    /**
+        @param filename the path to write LDIF data to
+    */
+    constructor(string filename) {
+        output = new File();
+        output.open2(filename, O_CREAT | O_WRONLY | O_TRUNC);
+    }
+
+    #! Writes an LDIF entry (content record)
+    /**
+        @param dn the Distinguished Name
+        @param attrs the entry's attributes
+    */
+    nothing writeEntry(string dn, hash<auto> attrs) {
+        writeLine("dn: " + dn);
+        foreach string name in (keys attrs) {
+            auto val = attrs{name};
+            if (val.typeCode() == NT_LIST) {
+                foreach auto v in (val) {
+                    writeAttributeValue(name, v);
+                }
+            } else {
+                writeAttributeValue(name, val);
+            }
+        }
+        output.write("\n");
+    }
+
+    #! Writes a comment line
+    nothing writeComment(string comment) {
+        writeLine("# " + comment);
+    }
+
+    #! Writes an LDIF change record
+    nothing writeChange(hash<LdifChangeInfo> change) {
+        writeLine("dn: " + change.dn);
+        writeLine("changetype: " + change.changetype);
+        switch (change.changetype) {
+            case "add":
+                if (exists change.attributes) {
+                    foreach string name in (keys change.attributes) {
+                        auto val = change.attributes{name};
+                        if (val.typeCode() == NT_LIST) {
+                            foreach auto v in (val) {
+                                writeAttributeValue(name, v);
+                            }
+                        } else {
+                            writeAttributeValue(name, val);
+                        }
+                    }
+                }
+                break;
+            case "modify":
+                if (exists change.modifications) {
+                    foreach hash<auto> mod in (change.modifications) {
+                        writeLine(mod.mod + ": " + mod.attr);
+                        if (exists mod.value) {
+                            if (mod.value.typeCode() == NT_LIST) {
+                                foreach auto v in (mod.value) {
+                                    writeAttributeValue(mod.attr, v);
+                                }
+                            } else {
+                                writeAttributeValue(mod.attr, mod.value);
+                            }
+                        }
+                        writeLine("-");
+                    }
+                }
+                break;
+            case "modrdn":
+                if (exists change.newrdn) {
+                    writeLine("newrdn: " + change.newrdn);
+                }
+                writeLine("deleteoldrdn: " + (change.deleteoldrdn ? "1" : "0"));
+                if (exists change.newsuperior) {
+                    writeLine("newsuperior: " + change.newsuperior);
+                }
+                break;
+            case "delete":
+                break;
+        }
+        output.write("\n");
+    }
+
+    private writeAttributeValue(string name, auto value) {
+        if (value.typeCode() == NT_BINARY) {
+            writeLine(name + ":: " + make_base64_string(value));
+        } else {
+            string sval = string(value);
+            # check if value needs base64 encoding (non-ASCII or starts with special chars)
+            if (needsBase64(sval)) {
+                writeLine(name + ":: " + make_base64_string(sval));
+            } else {
+                writeLine(name + ": " + sval);
+            }
+        }
+    }
+
+    private writeLine(string line) {
+        if (line.size() <= lineWidth) {
+            output.write(line + "\n");
+        } else {
+            # fold long lines
+            output.write(line.substr(0, lineWidth) + "\n");
+            int offset = lineWidth;
+            while (offset < line.size()) {
+                int chunk = lineWidth - 1;  # -1 for continuation space
+                if (offset + chunk > line.size()) {
+                    chunk = line.size() - offset;
+                }
+                output.write(" " + line.substr(offset, chunk) + "\n");
+                offset += chunk;
+            }
+        }
+    }
+
+    #! Check if a string value needs base64 encoding
+    private static bool needsBase64(string val) {
+        if (val.empty()) {
+            return False;
+        }
+        # starts with space, colon, or '<'
+        if (val[0] == " " || val[0] == ":" || val[0] == "<") {
+            return True;
+        }
+        # contains non-ASCII
+        for (int i = 0; i < val.size(); i++) {
+            if (ord(val[i]) > 127 || ord(val[i]) < 32) {
+                return True;
+            }
+        }
+        return False;
+    }
+}
