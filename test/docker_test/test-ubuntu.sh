@@ -101,6 +101,7 @@ export LDAP_PEOPLEDN="ou=people,dc=example,dc=com"
 export LDAP_GROUPSDN="ou=groups,dc=example,dc=com"
 
 cd ${MODULE_SRC_DIR}/test
-su -c "qore openldap.qtest -v" qore
+QORE_BIN=$(which qore)
+su -c "${QORE_BIN} openldap.qtest -v" qore
 
 echo && echo "-- tests completed successfully --"
