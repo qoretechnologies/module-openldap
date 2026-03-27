@@ -83,6 +83,7 @@ qore_external_user_module("qlib/LdapConnectionPool.qm" "")
 qore_external_user_module("qlib/LdapAsync.qm" "")
 qore_external_user_module("qlib/LdifHelper.qm" "")
 qore_external_user_module("qlib/LdapActiveDirectory.qm" "")
+qore_external_user_module("qlib/LdapCli.qm" "")
 
 # Install bin scripts
 install(PROGRAMS
@@ -95,9 +96,6 @@ install(PROGRAMS
     bin/qldapwhoami
     DESTINATION bin
 )
-
-# Install shared library for bin scripts
-install(FILES bin/qldaplib.ql DESTINATION bin)
 
 qore_dist("${PROJECT_VERSION}")
 

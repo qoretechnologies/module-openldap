@@ -1,7 +1,7 @@
 # -*- mode: qore; indent-tabs-mode: nil -*-
-#! @file qldaplib.ql shared code for qldap* CLI tools
+#! @file LdapCli.qm shared code for qldap* CLI tools
 
-/*  qldaplib.ql Copyright 2026 Qore Technologies, s.r.o.
+/*  LdapCli.qm Copyright 2026 Qore Technologies, s.r.o.
 
     Permission is hereby granted, free of charge, to any person obtaining a
     copy of this software and associated documentation files (the "Software"),
@@ -22,9 +22,35 @@
     DEALINGS IN THE SOFTWARE.
 */
 
-const DefaultUri = "ldap://localhost:389";
+%modern
 
-const CommonOpts = {
+module LdapCli {
+    version = "1.0";
+    desc = "Shared utilities for qldap* CLI tools";
+    author = "David Nichols <david@qore.org>";
+    url = "https://qore.org";
+    license = "MIT";
+}
+
+%requires openldap
+%requires Util
+
+/** @mainpage LdapCli Module
+
+    @section ldapcliintro Introduction
+
+    This module provides shared constants, helper functions, and classes for
+    the qldap* command-line tools (qldapsearch, qldapadd, qldapmodify,
+    qldapdelete, qldappasswd, qldapwhoami, qldapcompare).
+*/
+
+public namespace LdapCli {
+
+#! Default LDAP server URI
+public const DefaultUri = "ldap://localhost:389";
+
+#! Common command-line options shared by all qldap* tools
+public const CommonOpts = {
     "uri": "H,uri=s",
     "binddn": "D,binddn=s",
     "password": "w,passwd=s",
@@ -39,19 +65,23 @@ const CommonOpts = {
     "help": "h,help",
 };
 
-const LdapOptionKeys = ("binddn", "password", "timeout", "protocol", "no-referrals", "starttls");
+#! Keys to pass through to LdapClient constructor
+public const LdapOptionKeys = ("binddn", "password", "timeout", "protocol", "no-referrals", "starttls");
 
-sub ldap_error(Util::TerminalColor color, string fmt) {
+#! Print an error message and exit
+public sub ldap_error(Util::TerminalColor color, string fmt) {
     string msg = vsprintf(fmt, argv);
     stderr.printf("%s %s\n", color.error("ERROR:"), msg);
     exit(1);
 }
 
-sub ldap_success(Util::TerminalColor color, string msg) {
+#! Print a success message
+public sub ldap_success(Util::TerminalColor color, string msg) {
     printf("%s\n", color.success(msg));
 }
 
-sub process_bind_password(reference<hash> opts) {
+#! Process bind password prompt option
+public sub process_bind_password(reference<hash> opts) {
     if (opts.promptbind) {
         stdout.printf("Enter LDAP Bind Password: ");
         TerminalInputHelper t();
@@ -59,11 +89,13 @@ sub process_bind_password(reference<hash> opts) {
     }
 }
 
-string sub get_uri(hash opts) {
+#! Get LDAP URI from options or default
+public string sub get_uri(hash opts) {
     return string(opts.uri ?? DefaultUri);
 }
 
-sub print_common_usage(Util::TerminalColor color) {
+#! Print common usage options
+public sub print_common_usage(Util::TerminalColor color) {
     printf("%s\n", color.bold("Common LDAP Options:"));
     printf("  %s  %s\n", color.key(TerminalColor::padRight("-D,--binddn=ARG", 22)), "bind DN");
     printf("  %s  %s\n", color.key(TerminalColor::padRight("-H,--uri=ARG", 22)), "LDAP Uniform Resource Identifier(s)");
@@ -80,7 +112,8 @@ sub print_common_usage(Util::TerminalColor color) {
     printf("  %s  %s\n", color.key(TerminalColor::padRight("-h,--help", 22)), "this help text");
 }
 
-sub handle_common_opts(hash opts, Util::TerminalColor color) {
+#! Handle common options (info, etc.)
+public sub handle_common_opts(hash opts, Util::TerminalColor color) {
     if (opts.info) {
         printf("%s\n", color.bold("OpenLDAP Library Info:"));
         hash<auto> info = LdapClient::getInfo();
@@ -92,7 +125,7 @@ sub handle_common_opts(hash opts, Util::TerminalColor color) {
 }
 
 #! Print a single LDAP entry in colored format
-sub print_entry(Util::TerminalColor color, string dn, hash<auto> attrs) {
+public sub print_entry(Util::TerminalColor color, string dn, hash<auto> attrs) {
     printf("%s %s\n", color.dim("dn:"), color.bold(dn));
     foreach string name in (keys attrs) {
         auto val = attrs{name};
@@ -108,7 +141,7 @@ sub print_entry(Util::TerminalColor color, string dn, hash<auto> attrs) {
 }
 
 #! Print a single LDAP entry in LDIF format (uncolored)
-sub print_ldif_entry(string dn, hash<auto> attrs) {
+public sub print_ldif_entry(string dn, hash<auto> attrs) {
     printf("dn: %s\n", dn);
     foreach string name in (keys attrs) {
         auto val = attrs{name};
@@ -123,25 +156,13 @@ sub print_ldif_entry(string dn, hash<auto> attrs) {
     printf("\n");
 }
 
-sub print_ldif_attr(string name, auto val) {
+#! Print a single LDIF attribute value
+public sub print_ldif_attr(string name, auto val) {
     if (val.typeCode() == NT_BINARY) {
         printf("%s:: %s\n", name, make_base64_string(val));
     } else {
         string sval = string(val);
-        # base64 encode if value contains non-ASCII or starts with special chars
-        bool needs_b64 = False;
-        if (sval.size() > 0 && (sval[0] == " " || sval[0] == ":" || sval[0] == "<")) {
-            needs_b64 = True;
-        }
-        if (!needs_b64) {
-            for (int i = 0; i < sval.size(); i++) {
-                if (ord(sval[i]) > 127 || ord(sval[i]) < 32) {
-                    needs_b64 = True;
-                    break;
-                }
-            }
-        }
-        if (needs_b64) {
+        if (ldif_needs_base64(sval)) {
             printf("%s:: %s\n", name, make_base64_string(sval));
         } else {
             printf("%s: %s\n", name, sval);
@@ -149,7 +170,24 @@ sub print_ldif_attr(string name, auto val) {
     }
 }
 
-class TerminalInputHelper {
+#! Check if a string value needs base64 encoding for LDIF
+public bool sub ldif_needs_base64(string val) {
+    if (val.empty()) {
+        return False;
+    }
+    if (val[0] == " " || val[0] == ":" || val[0] == "<") {
+        return True;
+    }
+    for (int i = 0; i < val.size(); i++) {
+        if (ord(val[i]) > 127 || ord(val[i]) < 32) {
+            return True;
+        }
+    }
+    return False;
+}
+
+#! Helper class for reading passwords from the terminal without echo
+public class TerminalInputHelper {
     private {
         TermIOS orig = stdin.getTerminalAttributes();
         TermIOS input;
@@ -187,3 +225,5 @@ class TerminalInputHelper {
         stdin.setTerminalAttributes(TCSADRAIN, orig);
     }
 }
+
+} # namespace LdapCli

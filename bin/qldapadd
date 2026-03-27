@@ -4,10 +4,9 @@
 %modern
 
 %requires openldap
+%requires LdapCli
 %requires Util
 %requires qore >= 2.3
-
-%include qldaplib.ql
 
 main();
 
