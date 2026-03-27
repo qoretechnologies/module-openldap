@@ -689,6 +689,113 @@ public class LdapClientHelper {
     }
 }
 
+#! RAII wrapper for LDAP transactions (RFC 5805)
+/**
+    Provides automatic abort-on-scope-exit semantics for LDAP transactions.
+    If the transaction is not explicitly committed or aborted before the object
+    is destroyed, it is automatically aborted to prevent leaked transactions.
+
+    @par Example:
+    @code{.qore}
+%modern
+%requires openldap
+%requires LdapHelper
+
+LdapClient ldap("ldap://server", {"binddn": "cn=admin,...", "password": "secret"});
+
+{
+    LdapTransaction txn(ldap);
+    list<hash<auto>> ctrls = txn.getControls();
+
+    ldap.add("uid=user1,...", {"objectClass": "person", ...}, NOTHING, ctrls);
+    ldap.add("uid=user2,...", {"objectClass": "person", ...}, NOTHING, ctrls);
+
+    txn.commit();  # atomic: both adds succeed or both roll back
+}
+# if an exception is thrown before commit(), the destructor aborts the transaction
+    @endcode
+
+    @note The LDAP server must support RFC 5805 (LDAP Transactions). Not all servers
+    support this feature. Check the rootDSE \c supportedExtension attribute for
+    OID 1.3.6.1.1.21.1 before using transactions.
+*/
+public class LdapTransaction {
+    private {
+        LdapClient client;
+        binary txnId;
+        bool finished = False;
+    }
+
+    #! Starts a new LDAP transaction
+    /**
+        @param client the LdapClient to use
+        @param timeout optional timeout for the start operation
+
+        @throw LDAP-ERROR the server does not support transactions
+        @throw LDAP-TXN-ERROR error starting transaction
+    */
+    constructor(LdapClient client, *timeout timeout) {
+        self.client = client;
+        self.txnId = client.txnStart(timeout);
+    }
+
+    #! Auto-aborts the transaction if not already committed or aborted
+    destructor() {
+        if (!finished) {
+            try {
+                client.txnEnd(txnId, False);
+            } catch () {
+                # ignore errors during cleanup — connection may already be closed
+            }
+        }
+    }
+
+    #! Returns the transaction control hash for passing to operations
+    /**
+        @return a control hash with the transaction ID, OID, and critical=True
+    */
+    hash<auto> getControl() {
+        return {
+            "oid": LDAP_CONTROL_TXN_SPEC,
+            "value": txnId,
+            "critical": True,
+        };
+    }
+
+    #! Returns the transaction control as a list (convenience for the controls parameter)
+    /**
+        @return a single-element list containing the transaction control hash
+    */
+    list<hash<auto>> getControls() {
+        return (getControl(),);
+    }
+
+    #! Returns the raw transaction ID
+    binary getTxnId() {
+        return txnId;
+    }
+
+    #! Commits the transaction atomically
+    /**
+        @param timeout optional timeout
+
+        @throw LDAP-TXN-ERROR commit failed; all operations in the transaction are rolled back
+    */
+    nothing commit(*timeout timeout) {
+        client.txnEnd(txnId, True, timeout);
+        finished = True;
+    }
+
+    #! Aborts the transaction, rolling back all operations
+    /**
+        @param timeout optional timeout
+    */
+    nothing abort(*timeout timeout) {
+        client.txnEnd(txnId, False, timeout);
+        finished = True;
+    }
+}
+
 #! Represents a parsed LDAP URL (RFC 4516)
 /**
     Parses URLs of the form: ldap[s]://host[:port]/base?attributes?scope?filter?extensions

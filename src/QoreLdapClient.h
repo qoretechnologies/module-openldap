@@ -1720,6 +1720,94 @@ public:
         return h.release();
     }
 
+    DLLLOCAL BinaryNode* txnStart(ExceptionSink* xsink, int my_timeout_ms = 0) {
+        AutoLocker al(m);
+        if (checkValidIntern("txnStart", xsink)) {
+            return nullptr;
+        }
+        if (qore_check_cancel(xsink)) {
+            return nullptr;
+        }
+
+        // set timeout before synchronous call
+        if (my_timeout_ms) {
+            TimeoutHelper timeout(my_timeout_ms);
+            ldap_set_option(ldp, LDAP_OPT_TIMEOUT, &timeout);
+        }
+
+        struct berval* txnid = nullptr;
+        int rc = ldap_txn_start_s(ldp, nullptr, nullptr, &txnid);
+
+        // restore default timeout
+        if (my_timeout_ms) {
+            TimeoutHelper timeout(timeout_ms);
+            ldap_set_option(ldp, LDAP_OPT_TIMEOUT, &timeout);
+        }
+
+        if (rc != LDAP_SUCCESS) {
+            doLdapError("txnStart", "ldap_txn_start_s", rc, xsink);
+            return nullptr;
+        }
+
+        if (!txnid || !txnid->bv_val || txnid->bv_len == 0) {
+            xsink->raiseException("LDAP-TXN-ERROR", "ldap_txn_start_s returned empty transaction ID");
+            if (txnid) {
+                ber_bvfree(txnid);
+            }
+            return nullptr;
+        }
+
+        BinaryNode* bn = new BinaryNode;
+        bn->append(txnid->bv_val, txnid->bv_len);
+        ber_bvfree(txnid);
+        return bn;
+    }
+
+    DLLLOCAL int txnEnd(ExceptionSink* xsink, const BinaryNode* txnid, bool commit, int my_timeout_ms = 0) {
+        if (!txnid || txnid->size() == 0) {
+            xsink->raiseException("LDAP-TXN-ERROR", "invalid or empty transaction ID");
+            return -1;
+        }
+
+        struct berval bv;
+        bv.bv_val = (char*)txnid->getPtr();
+        bv.bv_len = txnid->size();
+
+        AutoLocker al(m);
+        if (checkValidIntern("txnEnd", xsink)) {
+            return -1;
+        }
+        if (qore_check_cancel(xsink)) {
+            return -1;
+        }
+
+        // set timeout before synchronous call
+        if (my_timeout_ms) {
+            TimeoutHelper timeout(my_timeout_ms);
+            ldap_set_option(ldp, LDAP_OPT_TIMEOUT, &timeout);
+        }
+
+        int retidp = 0;
+        int rc = ldap_txn_end_s(ldp, commit ? 1 : 0, &bv, nullptr, nullptr, &retidp);
+
+        // restore default timeout
+        if (my_timeout_ms) {
+            TimeoutHelper timeout(timeout_ms);
+            ldap_set_option(ldp, LDAP_OPT_TIMEOUT, &timeout);
+        }
+
+        if (rc != LDAP_SUCCESS) {
+            QoreStringNode* desc = getErrorText("txnEnd", "ldap_txn_end_s", rc);
+            if (retidp) {
+                desc->sprintf(" (failed operation message ID: %d)", retidp);
+            }
+            xsink->raiseException("LDAP-TXN-ERROR", desc);
+            return -1;
+        }
+
+        return 0;
+    }
+
     DLLLOCAL QoreStringNode* getUriStr() const {
         assert(uri);
         return uri->stringRefSelf();

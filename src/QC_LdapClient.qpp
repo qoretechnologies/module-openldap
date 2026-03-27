@@ -133,6 +133,15 @@ const LDAP_EXOP_START_TLS = "1.3.6.1.4.1.1466.20037";
 
 //! OID for the Refresh extended operation (RFC 2589)
 const LDAP_EXOP_REFRESH = "1.3.6.1.4.1.1466.101.119.1";
+
+//! OID for the Start Transaction extended operation (RFC 5805)
+const LDAP_EXOP_TXN_START = "1.3.6.1.1.21.1";
+
+//! OID for the Transaction Specification control (RFC 5805)
+const LDAP_CONTROL_TXN_SPEC = "1.3.6.1.1.21.2";
+
+//! OID for the End Transaction extended operation (RFC 5805)
+const LDAP_EXOP_TXN_END = "1.3.6.1.1.21.3";
 ///@}
 
 /** @defgroup ldap_scope_constants LDAP Search Scope Constants
@@ -525,6 +534,56 @@ $ldap.passwd("uid=test,ou=people,dc=example,dc=com", "oldpwd", "newpwd");
 */
 nothing LdapClient::passwd(string dn, string oldpwd, string newpwd, *timeout timeout_ms, *softlist controls) {
    ldap->passwd(xsink, dn, oldpwd, newpwd, timeout_ms, controls && !controls->empty() ? controls : nullptr);
+}
+
+//! starts a new LDAP transaction (RFC 5805)
+/** @par Example:
+    @code
+binary txnid = ldap.txnStart();
+# perform operations with transaction control...
+ldap.txnEnd(txnid);
+    @endcode
+
+    @param timeout_ms optional timeout in milliseconds
+
+    @return a binary transaction ID to pass as a control value with subsequent operations
+
+    @note The server must support RFC 5805 LDAP Transactions. Check for OID 1.3.6.1.1.21.1 in
+    the rootDSE supportedExtension attribute. Use the returned transaction ID with the
+    @ref LDAP_CONTROL_TXN_SPEC control (criticality must be True) on each operation in the
+    transaction.
+
+    @throw LDAP-NO-CONTEXT the LDAP session is not connected
+    @throw LDAP-ERROR the server does not support transactions or an error occurred
+    @throw LDAP-TXN-ERROR the server returned an empty transaction ID
+
+    @see @ref LDAP_CONTROL_TXN_SPEC
+    @see txnEnd()
+ */
+binary LdapClient::txnStart(*timeout timeout_ms) {
+    return ldap->txnStart(xsink, timeout_ms);
+}
+
+//! ends (commits or aborts) an LDAP transaction (RFC 5805)
+/** @par Example:
+    @code
+binary txnid = ldap.txnStart();
+ldap.add(dn, attrs, NOTHING, ({"oid": LDAP_CONTROL_TXN_SPEC, "value": txnid, "critical": True},));
+ldap.txnEnd(txnid, True);  # commit
+    @endcode
+
+    @param txnid the transaction ID returned by txnStart()
+    @param commit if True (default), commit the transaction; if False, abort it
+    @param timeout_ms optional timeout in milliseconds
+
+    @throw LDAP-NO-CONTEXT the LDAP session is not connected
+    @throw LDAP-TXN-ERROR transaction commit/abort failed; the exception description includes the
+    message ID of the first failed operation if available
+
+    @see txnStart()
+ */
+nothing LdapClient::txnEnd(binary txnid, bool commit = True, *timeout timeout_ms) {
+    ldap->txnEnd(xsink, txnid, commit, timeout_ms);
 }
 
 //! performs a generic LDAP extended operation

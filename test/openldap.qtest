@@ -129,6 +129,11 @@ public class OpenLdapTest inherits QUnit::Test {
         addTestCase("ActiveDirectoryClient GUID/SID decoding test", \testAdDecoding());
         addTestCase("LdapClientHelper whoAmI test", \testWhoAmI());
         addTestCase("Extended op OID constants test", \testExtOpConstants());
+        addTestCase("Transaction OID constants test", \testTxnConstants());
+        addTestCase("Transaction support test", \testTransaction());
+        addTestCase("Transaction abort test", \testTransactionAbort());
+        addTestCase("LdapTransaction RAII test", \testLdapTransactionRaii());
+        addTestCase("Transaction negative tests", \testTransactionNegative());
 
         set_return_value(main());
     }
@@ -2449,5 +2454,216 @@ public class OpenLdapTest inherits QUnit::Test {
         assertTrue(stats.total >= 1);  # min_connections
 
         pool.close();
+    }
+
+    # ============================================================
+    # Transaction tests (RFC 5805)
+    # ============================================================
+
+    #! Helper: check if server supports transactions
+    private bool serverSupportsTransactions() {
+        try {
+            LdapClient ldap = getClient();
+            # try to start a transaction — if unsupported, throws LDAP-ERROR
+            binary txnid = ldap.txnStart(5s);
+            # abort immediately
+            ldap.txnEnd(txnid, False);
+            return True;
+        } catch (hash<ExceptionInfo> ex) {
+            return False;
+        }
+    }
+
+    #! Test transaction OID constants
+    testTxnConstants() {
+        assertEq("1.3.6.1.1.21.1", LDAP_EXOP_TXN_START);
+        assertEq("1.3.6.1.1.21.2", LDAP_CONTROL_TXN_SPEC);
+        assertEq("1.3.6.1.1.21.3", LDAP_EXOP_TXN_END);
+    }
+
+    #! Test transaction commit
+    testTransaction() {
+        skipIfReadOnly("transaction test requires write access");
+        if (!serverSupportsTransactions()) {
+            testSkip("Skipped: server does not support RFC 5805 transactions");
+            return;
+        }
+
+        LdapClient ldap = getClient();
+        string dn1 = sprintf("uid=txntest1,%s", peopledn);
+        string dn2 = sprintf("uid=txntest2,%s", peopledn);
+
+        # cleanup any leftover entries
+        try { ldap.del(dn1); } catch () {}
+        try { ldap.del(dn2); } catch () {}
+
+        # start transaction
+        binary txnid = ldap.txnStart();
+        assertTrue(txnid.size() > 0);
+
+        list<hash<auto>> ctrls = ({
+            "oid": LDAP_CONTROL_TXN_SPEC,
+            "value": txnid,
+            "critical": True,
+        },);
+
+        # add two entries within the transaction
+        ldap.add(dn1, {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "txntest1", "cn": "Txn Test 1", "sn": "Test",
+            "uidNumber": "99991", "gidNumber": "99999",
+            "homeDirectory": "/home/txntest1",
+        }, NOTHING, ctrls);
+
+        ldap.add(dn2, {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "txntest2", "cn": "Txn Test 2", "sn": "Test",
+            "uidNumber": "99992", "gidNumber": "99999",
+            "homeDirectory": "/home/txntest2",
+        }, NOTHING, ctrls);
+
+        # commit
+        ldap.txnEnd(txnid, True);
+
+        # verify both entries exist
+        hash<auto> r1 = ldap.search({
+            "base": dn1, "filter": "(objectClass=*)", "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(r1.hasKey(dn1));
+
+        hash<auto> r2 = ldap.search({
+            "base": dn2, "filter": "(objectClass=*)", "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(r2.hasKey(dn2));
+
+        # cleanup
+        ldap.del(dn1);
+        ldap.del(dn2);
+    }
+
+    #! Test transaction abort
+    testTransactionAbort() {
+        skipIfReadOnly("transaction abort test requires write access");
+        if (!serverSupportsTransactions()) {
+            testSkip("Skipped: server does not support RFC 5805 transactions");
+            return;
+        }
+
+        LdapClient ldap = getClient();
+        string dn1 = sprintf("uid=txnabort1,%s", peopledn);
+
+        # cleanup
+        try { ldap.del(dn1); } catch () {}
+
+        # start transaction, add entry, then abort
+        binary txnid = ldap.txnStart();
+        list<hash<auto>> ctrls = ({
+            "oid": LDAP_CONTROL_TXN_SPEC,
+            "value": txnid,
+            "critical": True,
+        },);
+
+        ldap.add(dn1, {
+            "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+            "uid": "txnabort1", "cn": "Abort Test", "sn": "Test",
+            "uidNumber": "99993", "gidNumber": "99999",
+            "homeDirectory": "/home/txnabort1",
+        }, NOTHING, ctrls);
+
+        # abort the transaction
+        ldap.txnEnd(txnid, False);
+
+        # verify entry does NOT exist
+        try {
+            hash<auto> r = ldap.search({
+                "base": dn1, "filter": "(objectClass=*)", "scope": LDAP_SCOPE_BASE,
+            });
+            assertFalse(r.hasKey(dn1));
+        } catch (hash<ExceptionInfo> ex) {
+            # LDAP-RESULT-ERROR (no such object) is expected
+            assertTrue(ex.err == "LDAP-RESULT-ERROR");
+        }
+    }
+
+    #! Test LdapTransaction RAII auto-abort
+    testLdapTransactionRaii() {
+        skipIfReadOnly("RAII transaction test requires write access");
+        if (!serverSupportsTransactions()) {
+            testSkip("Skipped: server does not support RFC 5805 transactions");
+            return;
+        }
+
+        LdapClient ldap = getClient();
+        string dn1 = sprintf("uid=txnraii1,%s", peopledn);
+
+        # cleanup
+        try { ldap.del(dn1); } catch () {}
+
+        # test auto-abort: create transaction in a block, don't commit
+        {
+            LdapTransaction txn(ldap);
+            list<hash<auto>> ctrls = txn.getControls();
+
+            ldap.add(dn1, {
+                "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+                "uid": "txnraii1", "cn": "RAII Test", "sn": "Test",
+                "uidNumber": "99994", "gidNumber": "99999",
+                "homeDirectory": "/home/txnraii1",
+            }, NOTHING, ctrls);
+
+            # txn goes out of scope here without commit → auto-abort
+        }
+
+        # verify entry does NOT exist
+        try {
+            hash<auto> r = ldap.search({
+                "base": dn1, "filter": "(objectClass=*)", "scope": LDAP_SCOPE_BASE,
+            });
+            assertFalse(r.hasKey(dn1));
+        } catch (hash<ExceptionInfo> ex) {
+            assertTrue(ex.err == "LDAP-RESULT-ERROR");
+        }
+
+        # test explicit commit via LdapTransaction
+        {
+            LdapTransaction txn(ldap);
+            list<hash<auto>> ctrls = txn.getControls();
+            assertTrue(txn.getTxnId().size() > 0);
+
+            ldap.add(dn1, {
+                "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
+                "uid": "txnraii1", "cn": "RAII Test", "sn": "Test",
+                "uidNumber": "99994", "gidNumber": "99999",
+                "homeDirectory": "/home/txnraii1",
+            }, NOTHING, ctrls);
+
+            txn.commit();
+        }
+
+        # verify entry exists after commit
+        hash<auto> r = ldap.search({
+            "base": dn1, "filter": "(objectClass=*)", "scope": LDAP_SCOPE_BASE,
+        });
+        assertTrue(r.hasKey(dn1));
+
+        # cleanup
+        ldap.del(dn1);
+    }
+
+    #! Test transaction negative cases
+    testTransactionNegative() {
+        LdapClient ldap = getClient();
+
+        # txnEnd with invalid (empty) transaction ID
+        assertThrows("LDAP-TXN-ERROR", sub() {
+            ldap.txnEnd(binary(), True);
+        });
+
+        # txnEnd with garbage transaction ID (if server supports transactions)
+        if (serverSupportsTransactions()) {
+            assertThrows("LDAP-TXN-ERROR", sub() {
+                ldap.txnEnd(<deadbeef>, True);
+            });
+        }
     }
 }
