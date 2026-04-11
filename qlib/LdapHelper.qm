@@ -696,7 +696,7 @@ public class LdapClientHelper {
     is destroyed, it is automatically aborted to prevent leaked transactions.
 
     @par Example:
-    @code{.qore}
+    @code{.py}
 %modern
 %requires openldap
 %requires LdapHelper

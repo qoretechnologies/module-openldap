@@ -43,7 +43,7 @@ module LdapConnectionPool {
 
     @section ldapconnectionpool_example Example Usage
 
-    @code{.qore}
+    @code{.py}
 %modern
 
 %requires LdapConnectionPool

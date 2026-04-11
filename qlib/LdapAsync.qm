@@ -95,7 +95,7 @@ public class LdapFuture {
     each other, since each uses an independent LDAP connection.
 
     @par Example:
-    @code
+    @code{.py}
 LdapClient client("ldap://server", {"binddn": "cn=admin,...", "password": "secret"});
 LdapAsyncClient async(client);
 

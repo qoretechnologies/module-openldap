@@ -39,7 +39,7 @@
 
     The \c LdapConnectionPool module provides efficient connection pooling for multi-threaded applications:
 
-    @code{.qore}
+    @code{.py}
 %new-style
 %requires LdapConnectionPool
 
@@ -78,7 +78,7 @@ pool.release(ldap);
     - \c LdapUrl - RFC 4516 LDAP URL parser
     - \c LdapSchema - LDAP schema introspection (objectClasses, attributeTypes)
 
-    @code{.qore}
+    @code{.py}
 %new-style
 %requires LdapHelper
 
@@ -118,7 +118,7 @@ while (iter.next()) {
 
     The \c LdapAsync module provides non-blocking LDAP operations using the Qore Future/Promise pattern:
 
-    @code{.qore}
+    @code{.py}
 %modern
 %requires LdapAsync
 
@@ -140,7 +140,7 @@ hash<auto> groups = f2.get(30s);
 
     The \c LdifHelper module provides LDIF (RFC 2849) reading and writing:
 
-    @code{.qore}
+    @code{.py}
 %modern
 %requires LdifHelper
 
@@ -159,7 +159,7 @@ writer.writeEntry("dc=example,dc=com", {"objectClass": ("top", "domain"), "dc": 
 
     The \c LdapActiveDirectory module provides Active Directory-specific features:
 
-    @code{.qore}
+    @code{.py}
 %modern
 %requires LdapActiveDirectory
 
@@ -184,7 +184,7 @@ string sid = ActiveDirectoryClient::decodeObjectSid(binary_sid_value);
     The bulk of the LDAP functionality provided by this module is encapsulated in the @ref OpenLdap::LdapClient class.  There are also four example programs included with the openldap module: qldapsearch, qldapmodify, qldapdelete, qldapadd, and qldappasswd.  These are somewhat similar in usage to the standard LDAP commands, however are designed to provide user-friendly examples of command-line Qore-based LDAP integration, and, for example, do not support or work with LDIF formatted data, etc (for example, qldapsearch outputs the results of a search as a multi-line formatted Qore hash).
 
     @par Performing an LDAP Search
-    @code
+    @code{.py}
 %new-style
 %requires openldap
 string uri = "ldap://localhost";
@@ -206,7 +206,7 @@ hash result = ldap.search(search);
     @see @ref OpenLdap::LdapClient::search() "LdapClient::search()"
 
     @par Adding an LDAP Entry
-    @code
+    @code{.py}
 %new-style
 %requires openldap
 string uri = "ldap://localhost";
@@ -222,7 +222,7 @@ ldap.add("uid=test,ou=people,dc=example,dc=com", {"objectclass": "inetorgperson"
     @see @ref OpenLdap::LdapClient::add() "LdapClient::add()"
 
     @par Modifying Attributes of an Existing LDAP Entry
-    @code
+    @code{.py}
 %new-style
 %requires openldap
 string uri = "ldap://localhost";
@@ -238,7 +238,7 @@ ldap.modify("uid=test,ou=people,dc=example,dc=com", {"mod": LDAP_MOD_REPLACE, "a
     @see @ref OpenLdap::LdapClient::modify() "LdapClient::modify()"
 
     @par Deleting an Existing LDAP Entry
-    @code
+    @code{.py}
 %requires openldap
 string uri = "ldap://localhost";
 hash<auto> conn_opts = {
@@ -253,7 +253,7 @@ ldap.del("uid=test,ou=people,dc=example,dc=com");
     @see @ref OpenLdap::LdapClient::del() "LdapClient::del()"
 
     @par Comparing Attribute Values
-    @code
+    @code{.py}
 %new-style
 %requires openldap
 string uri = "ldap://localhost";
@@ -268,7 +268,7 @@ printf("Match: %y\n", match);
     @see @ref OpenLdap::LdapClient::compare() "LdapClient::compare()"
 
     @par Renaming an LDAP Entry
-    @code
+    @code{.py}
 %new-style
 %requires openldap
 string uri = "ldap://localhost";
@@ -282,7 +282,7 @@ ldap.rename("uid=oldname,ou=people,dc=example,dc=com", "uid=newname", "ou=people
     @see @ref OpenLdap::LdapClient::rename() "LdapClient::rename()"
 
     @par Changing a User's Password
-    @code
+    @code{.py}
 %new-style
 %requires openldap
 string uri = "ldap://localhost";
@@ -296,7 +296,7 @@ ldap.passwd("uid=test,ou=people,dc=example,dc=com", "oldpassword", "newpassword"
     @see @ref OpenLdap::LdapClient::passwd() "LdapClient::passwd()"
 
     @par SASL Bind (GSSAPI, DIGEST-MD5, EXTERNAL, etc.)
-    @code
+    @code{.py}
 %modern
 %requires openldap
 LdapClient ldap("ldap://localhost");
@@ -310,7 +310,7 @@ ldap.saslBind({
     @see @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
 
     @par Hardened SASL/GSSAPI Bind
-    @code
+    @code{.py}
 %modern
 %requires openldap
 LdapClient ldap("ldaps://ad.example.com");
@@ -326,7 +326,7 @@ ldap.saslBind({
     @see @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
 
     @par Paged Search (for directories with size limits)
-    @code
+    @code{.py}
 %modern
 %requires openldap
 LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
@@ -339,7 +339,7 @@ hash<auto> all_entries = ldap.search({
     @endcode
 
     @par Using Server Controls
-    @code
+    @code{.py}
 %modern
 %requires openldap
 LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
@@ -354,7 +354,7 @@ hash<auto> result = ldap.search({
     @endcode
 
     @par Extended Operations (Who Am I?)
-    @code
+    @code{.py}
 %modern
 %requires openldap
 LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
@@ -366,7 +366,7 @@ if (exists result.value) {
     @see @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()"
 
     @par Binary Attribute Handling
-    @code
+    @code{.py}
 %modern
 %requires openldap
 # Known binary attributes (jpegPhoto, userCertificate, etc.) are automatically
@@ -385,7 +385,7 @@ hash<auto> result = ldap.search({
     @endcode
 
     @par LDAP Transactions (RFC 5805)
-    @code
+    @code{.py}
 %modern
 %requires openldap
 %requires LdapHelper

@@ -244,7 +244,7 @@ qclass LdapClient [arg=QoreLdapClient* ldap; dom=NETWORK; ns=OpenLdap; flags=fin
     set the \c "starttls" argument to \c True.
 
     @par Example:
-    @code
+    @code{.py}
 my LdapClient $ldap("ldaps://ldap.example.com:389", ("starttls": True, "timeout": 20s));
     @endcode
 
@@ -275,7 +275,7 @@ LdapClient::constructor(string uri, *hash options) {
 
 //! unbinds from the LDAP server (if a connection has been established) and destroys the object
 /** @par Example:
-    @code
+    @code{.py}
 delete $ldap;
     @endcode
  */
@@ -287,7 +287,7 @@ LdapClient::destructor() {
 //! Creates a new LdapClient object based on the original
 /**
     @par Example:
-    @code
+    @code{.py}
 my LdapClient $ldap2 = $ldap.copy();
     @endcode
 
@@ -303,7 +303,7 @@ LdapClient::copy() {
 /** The current session is disconnected before binding again.
 
     @par Example:
-    @code
+    @code{.py}
 $ldap.bind($h);
     @endcode
 
@@ -325,7 +325,7 @@ LdapClient::bind(hash bind, *timeout timeout_ms) {
 
 //! performs a SASL bind to the server with the given mechanism and credentials
 /** @par Example:
-    @code
+    @code{.py}
 $ldap.saslBind(("mechanism": "DIGEST-MD5", "authcid": "user", "password": "secret"));
     @endcode
 
@@ -356,7 +356,7 @@ nothing LdapClient::saslBind(hash opts, *timeout timeout_ms) {
 
 //! performs a search on the LDAP server
 /** @par Example:
-    @code
+    @code{.py}
 my hash $h = $ldap.search(("base": "dc=example,dc=cp,", "filter": "(objectClass=*)", "attributes": "uid");
     @endcode
 
@@ -452,7 +452,7 @@ hash LdapClient::search(hash h, *timeout timeout_ms, *softlist controls) {
 /** Give the new entry's objectclass as an attribute; an attribute value can be a list to add multiple values to an attribute
 
     @par Example:
-    @code
+    @code{.py}
 $ldap.add("uid=temp,ou=people,dc=example,dc=com", ("objectclass": "inetorgperson", "sn": "Test", "cn": "test test"));
     @endcode
 
@@ -475,7 +475,7 @@ nothing LdapClient::add(string dn, hash attrs, *timeout timeout_ms, *softlist co
 
 //! modify (add, replace, delete) ldap attributes; if any errors occur (entry does not exist, etc), an \c LDAP-ERROR exception will be thrown
 /** @par Example:
-    @code
+    @code{.py}
 $ldap.modify("uid=temp,ou=people,dc=example,dc=com", ("mod": LDAP_MOD_ADD, "attr": "someattr", "value": "new-value"));
     @endcode
 
@@ -501,7 +501,7 @@ nothing LdapClient::modify(string dn, softlist mods, *timeout timeout_ms, *softl
 
 //! delete ldap entries; if any errors occur (entry does not exist, etc), an \c LDAP-ERROR exception will be thrown
 /** @par Example:
-    @code
+    @code{.py}
 $ldap.del("uid=temp,ou=people,dc=example,dc=com");
     @endcode
 
@@ -522,7 +522,7 @@ nothing LdapClient::del(string dn, *timeout timeout_ms, *softlist controls) {
 
 //! check ldap attribute values; if any errors occur (entry does not exist, etc), an \c LDAP-ERROR exception will be thrown
 /** @par Example:
-    @code
+    @code{.py}
 my bool $b = $ldap.compare("uid=temp,ou=people,dc=example,dc=com", "uidnumber", 1000);
     @endcode
 
@@ -547,7 +547,7 @@ bool LdapClient::compare(string dn, string attr, softlist vals, *timeout timeout
 
 //! renames entries in the Directory Information Tree
 /** @par Example:
-    @code
+    @code{.py}
 $ldap.rename("uid=test,ou=people,dc=example,dc=com", "uid=test1", "ou=people,dc=example,dc=com");
     @endcode
 
@@ -571,7 +571,7 @@ nothing LdapClient::rename(string dn, string newrdn, string newparent, softbool 
 
 //! changes the LDAP password of a user
 /** @par Example:
-    @code
+    @code{.py}
 $ldap.passwd("uid=test,ou=people,dc=example,dc=com", "oldpwd", "newpwd");
     @endcode
 
@@ -594,7 +594,7 @@ nothing LdapClient::passwd(string dn, string oldpwd, string newpwd, *timeout tim
 
 //! starts a new LDAP transaction (RFC 5805)
 /** @par Example:
-    @code
+    @code{.py}
 binary txnid = ldap.txnStart();
 # perform operations with transaction control...
 ldap.txnEnd(txnid);
@@ -622,7 +622,7 @@ binary LdapClient::txnStart(*timeout timeout_ms) {
 
 //! ends (commits or aborts) an LDAP transaction (RFC 5805)
 /** @par Example:
-    @code
+    @code{.py}
 binary txnid = ldap.txnStart();
 ldap.add(dn, attrs, NOTHING, ({"oid": LDAP_CONTROL_TXN_SPEC, "value": txnid, "critical": True},));
 ldap.txnEnd(txnid, True);  # commit
@@ -644,7 +644,7 @@ nothing LdapClient::txnEnd(binary txnid, bool commit = True, *timeout timeout_ms
 
 //! performs a generic LDAP extended operation
 /** @par Example:
-    @code
+    @code{.py}
 # Who Am I? extended operation
 hash<auto> result = ldap.extendedOp(LDAP_EXOP_WHO_AM_I);
     @endcode
@@ -666,7 +666,7 @@ hash<auto> LdapClient::extendedOp(string oid, *binary value, *timeout timeout_ms
 
 //! returns the URI string used to connect to the LDAP server
 /** @par Example:
-    @code
+    @code{.py}
 my string $uri = $ldap.getUri();
     @endcode
 
@@ -678,7 +678,7 @@ string LdapClient::getUri() [flags=CONSTANT] {
 
 //! returns \c True if the connection to the server is secure, \c False if not
 /** @par Example:
-    @code
+    @code{.py}
 my bool $b = $ldap.isSecure();
     @endcode
 
