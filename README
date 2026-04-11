@@ -9,6 +9,10 @@ talk to LDAP servers.
 The LDAP API is standard but this module was specifically designed to compile
 and link with the openldap APIs and has not been tested with other LDAP APIs.
 
+The module includes SASL bind support, including GSSAPI-relevant hardening
+options such as channel binding, security strength factors, maximum security
+layer buffer size, and host canonicalization control.
+
 see docs for more information
 
 

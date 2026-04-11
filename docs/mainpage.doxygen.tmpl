@@ -309,6 +309,22 @@ ldap.saslBind({
     @endcode
     @see @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
 
+    @par Hardened SASL/GSSAPI Bind
+    @code
+%modern
+%requires openldap
+LdapClient ldap("ldaps://ad.example.com");
+ldap.saslBind({
+    "mechanism": "GSSAPI",
+    "channel-binding": "tls-endpoint",
+    "secprops": "minssf=128,maxssf=256,noanonymous",
+    "ssf-min": 128,
+    "ssf-max": 256,
+    "nocanon": True,
+});
+    @endcode
+    @see @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
+
     @par Paged Search (for directories with size limits)
     @code
 %modern
@@ -415,6 +431,8 @@ LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "pa
     - added server and client controls support on all LDAP operations; see @ref ldap_control_constants
     - added SASL authentication with any mechanism (GSSAPI, DIGEST-MD5, EXTERNAL, SCRAM, etc.) via
       @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
+    - added SASL hardening controls for GSSAPI and enterprise LDAP deployments: channel binding,
+      security properties, SSF min/max, external SSF, maximum buffer size, and canonicalization control
     - added paged results (RFC 2696) via the \c "page-size" search option; handles Active Directory's
       1000-entry limit transparently
     - added generic extended operations via @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()";

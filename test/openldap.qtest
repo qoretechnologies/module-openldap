@@ -1001,6 +1001,14 @@ public class OpenLdapTest inherits QUnit::Test {
         assertEq("delete", LDAP_MOD_DELETE);
         assertEq("replace", LDAP_MOD_REPLACE);
 
+        # test SASL hardening constants
+        assertEq(Type::Int, LDAP_SASL_CBINDING_NONE.type());
+        assertEq(Type::Int, LDAP_SASL_CBINDING_TLS_UNIQUE.type());
+        assertEq(Type::Int, LDAP_SASL_CBINDING_TLS_ENDPOINT.type());
+        assertEq(Type::Int, LDAP_SASL_SEC_NOPLAINTEXT.type());
+        assertEq(Type::Int, LDAP_SASL_SEC_NOANONYMOUS.type());
+        assertEq(Type::Int, LDAP_SASL_SEC_MUTUAL_AUTH.type());
+
         # test default timeout
         assertEq(60s, DefaultTimeout);
     }
@@ -2071,6 +2079,35 @@ public class OpenLdapTest inherits QUnit::Test {
         # unsupported mechanism (server may not support DIGEST-MD5)
         assertThrows("LDAP-ERROR", sub() {
             ldap.saslBind({"mechanism": "DIGEST-MD5", "authcid": "test", "password": "wrong"});
+        });
+
+        # invalid SASL hardening option types and values are rejected before binding
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"mechanism": "GSSAPI", "secprops": ""});
+        });
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"mechanism": "GSSAPI", "secprops": 1});
+        });
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"mechanism": "GSSAPI", "ssf-min": "128"});
+        });
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"mechanism": "GSSAPI", "ssf-max": -1});
+        });
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"mechanism": "GSSAPI", "maxbufsize": -1});
+        });
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"mechanism": "GSSAPI", "external-ssf": -1});
+        });
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"mechanism": "GSSAPI", "nocanon": 1});
+        });
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"mechanism": "GSSAPI", "channel-binding": "tls-exporter"});
+        });
+        assertThrows("LDAP-SASL-BIND-ERROR", sub() {
+            ldap.saslBind({"mechanism": "GSSAPI", "channel-binding": -1});
         });
     }
 

@@ -30,6 +30,7 @@
 #include <errno.h>
 #include <string.h>
 
+#include <climits>
 #include <memory>
 #include <set>
 #include <vector>
@@ -728,6 +729,93 @@ protected:
         return -1;
     }
 
+    DLLLOCAL static bool getOptionalSaslIntOption(const QoreHashNode& opts, const char* key, int& value,
+            ExceptionSink* xsink) {
+        QoreValue v = opts.getKeyValue(key);
+        if (v.isNullOrNothing()) {
+            return false;
+        }
+        if (v.getType() != NT_INT) {
+            xsink->raiseException("LDAP-SASL-BIND-ERROR", "'%s' key is not type 'int' but is type '%s'",
+                key, v.getTypeName());
+            return false;
+        }
+        int64 i = v.getAsBigInt();
+        if (i < 0 || i > INT_MAX) {
+            xsink->raiseException("LDAP-SASL-BIND-ERROR", "'%s' key must be between 0 and %d", key, INT_MAX);
+            return false;
+        }
+        value = (int)i;
+        return true;
+    }
+
+    DLLLOCAL static bool getOptionalSaslBoolOption(const QoreHashNode& opts, const char* key, int& value,
+            ExceptionSink* xsink) {
+        QoreValue v = opts.getKeyValue(key);
+        if (v.isNullOrNothing()) {
+            return false;
+        }
+        if (v.getType() != NT_BOOLEAN) {
+            xsink->raiseException("LDAP-SASL-BIND-ERROR", "'%s' key is not type 'bool' but is type '%s'",
+                key, v.getTypeName());
+            return false;
+        }
+        value = v.getAsBool() ? 1 : 0;
+        return true;
+    }
+
+    DLLLOCAL static bool parseSaslChannelBinding(const QoreHashNode& opts, int& value, ExceptionSink* xsink) {
+        QoreValue v = opts.getKeyValue("channel-binding");
+        if (v.isNullOrNothing()) {
+            return false;
+        }
+
+        if (v.getType() == NT_INT) {
+            int64 i = v.getAsBigInt();
+            if (i < 0 || i > INT_MAX) {
+                xsink->raiseException("LDAP-SASL-BIND-ERROR",
+                    "'channel-binding' key must be between 0 and %d", INT_MAX);
+                return false;
+            }
+            value = (int)i;
+            return true;
+        }
+        if (v.getType() != NT_STRING) {
+            xsink->raiseException("LDAP-SASL-BIND-ERROR",
+                "'channel-binding' key is not type 'string' or 'int' but is type '%s'", v.getTypeName());
+            return false;
+        }
+
+        QoreStringValueHelper str(v, QCS_UTF8, xsink);
+        if (*xsink) {
+            return false;
+        }
+        if (!strcasecmp(str->c_str(), "none")) {
+            value = LDAP_OPT_X_SASL_CBINDING_NONE;
+        } else if (!strcasecmp(str->c_str(), "tls-unique")) {
+            value = LDAP_OPT_X_SASL_CBINDING_TLS_UNIQUE;
+        } else if (!strcasecmp(str->c_str(), "tls-endpoint")
+                || !strcasecmp(str->c_str(), "tls-server-end-point")) {
+            value = LDAP_OPT_X_SASL_CBINDING_TLS_ENDPOINT;
+        } else {
+            xsink->raiseException("LDAP-SASL-BIND-ERROR",
+                "unsupported SASL channel-binding value '%s'; supported values are 'none', 'tls-unique', and "
+                "'tls-endpoint'", str->c_str());
+            return false;
+        }
+        return true;
+    }
+
+    DLLLOCAL int setLdapIntOption(const char* meth, const char* name, int option, int value,
+            ExceptionSink* xsink) const {
+        if (ldap_set_option(ldp, option, &value)) {
+            xsink->raiseException("LDAP-ERROR", "failed to set %s in LdapClient::%s(); ldap_set_option() failed",
+                name, meth);
+            return -1;
+        }
+        return 0;
+    }
+
     DLLLOCAL int checkFreeResult(const char* meth, const char* f, LDAPMessage* res, ExceptionSink* xsink) {
         QoreLdapParseResultHelper prh(meth, f, this, res, xsink);
         if (*xsink)
@@ -1022,9 +1110,44 @@ public:
         if (*xsink) {
             return -1;
         }
+        const QoreStringNode* secprops_node = check_hash_key<QoreStringNode>(xsink, opts, "secprops", "LDAP-SASL-BIND-ERROR");
+        if (*xsink) {
+            return -1;
+        }
+
+        int ssf_min = 0;
+        bool has_ssf_min = getOptionalSaslIntOption(opts, "ssf-min", ssf_min, xsink);
+        if (*xsink) {
+            return -1;
+        }
+        int ssf_max = 0;
+        bool has_ssf_max = getOptionalSaslIntOption(opts, "ssf-max", ssf_max, xsink);
+        if (*xsink) {
+            return -1;
+        }
+        int maxbufsize = 0;
+        bool has_maxbufsize = getOptionalSaslIntOption(opts, "maxbufsize", maxbufsize, xsink);
+        if (*xsink) {
+            return -1;
+        }
+        int external_ssf = 0;
+        bool has_external_ssf = getOptionalSaslIntOption(opts, "external-ssf", external_ssf, xsink);
+        if (*xsink) {
+            return -1;
+        }
+        int nocanon = 0;
+        bool has_nocanon = getOptionalSaslBoolOption(opts, "nocanon", nocanon, xsink);
+        if (*xsink) {
+            return -1;
+        }
+        int channel_binding = 0;
+        bool has_channel_binding = parseSaslChannelBinding(opts, channel_binding, xsink);
+        if (*xsink) {
+            return -1;
+        }
 
         // convert optional strings to UTF-8 (stack-allocated)
-        QoreString authcid_buf, authzid_buf, realm_buf, password_buf;
+        QoreString authcid_buf, authzid_buf, realm_buf, password_buf, secprops_buf;
         if (authcid_node) {
             QoreStringValueHelper tmp(authcid_node, QCS_UTF8, xsink);
             if (*xsink) {
@@ -1053,6 +1176,17 @@ public:
             }
             password_buf = **tmp;
         }
+        if (secprops_node) {
+            QoreStringValueHelper tmp(secprops_node, QCS_UTF8, xsink);
+            if (*xsink) {
+                return -1;
+            }
+            if (tmp->empty()) {
+                xsink->raiseException("LDAP-SASL-BIND-ERROR", "'secprops' key cannot be empty");
+                return -1;
+            }
+            secprops_buf = **tmp;
+        }
 
         // set up interaction data
         QoreSaslInteractData interact_data;
@@ -1068,6 +1202,36 @@ public:
 
         // Check for interrupt before SASL bind
         if (qore_check_cancel(xsink)) {
+            return -1;
+        }
+
+        if (secprops_node && ldap_set_option(ldp, LDAP_OPT_X_SASL_SECPROPS, secprops_buf.c_str())) {
+            xsink->raiseException("LDAP-ERROR",
+                "failed to set LDAP_OPT_X_SASL_SECPROPS in LdapClient::saslBind(); ldap_set_option() failed");
+            return -1;
+        }
+        if (has_ssf_min && setLdapIntOption("saslBind", "LDAP_OPT_X_SASL_SSF_MIN",
+                LDAP_OPT_X_SASL_SSF_MIN, ssf_min, xsink)) {
+            return -1;
+        }
+        if (has_ssf_max && setLdapIntOption("saslBind", "LDAP_OPT_X_SASL_SSF_MAX",
+                LDAP_OPT_X_SASL_SSF_MAX, ssf_max, xsink)) {
+            return -1;
+        }
+        if (has_maxbufsize && setLdapIntOption("saslBind", "LDAP_OPT_X_SASL_MAXBUFSIZE",
+                LDAP_OPT_X_SASL_MAXBUFSIZE, maxbufsize, xsink)) {
+            return -1;
+        }
+        if (has_external_ssf && setLdapIntOption("saslBind", "LDAP_OPT_X_SASL_SSF_EXTERNAL",
+                LDAP_OPT_X_SASL_SSF_EXTERNAL, external_ssf, xsink)) {
+            return -1;
+        }
+        if (has_nocanon && setLdapIntOption("saslBind", "LDAP_OPT_X_SASL_NOCANON",
+                LDAP_OPT_X_SASL_NOCANON, nocanon, xsink)) {
+            return -1;
+        }
+        if (has_channel_binding && setLdapIntOption("saslBind", "LDAP_OPT_X_SASL_CBINDING",
+                LDAP_OPT_X_SASL_CBINDING, channel_binding, xsink)) {
             return -1;
         }
 
@@ -1836,4 +2000,3 @@ public:
 };
 
 #endif
-

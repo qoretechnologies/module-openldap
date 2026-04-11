@@ -178,6 +178,39 @@ const LDAP_MOD_DELETE = "delete";
 const LDAP_MOD_REPLACE = "replace";
 ///@}
 
+/** @defgroup ldap_sasl_constants LDAP SASL Constants
+ */
+///@{
+namespace OpenLdap;
+
+//! Disable SASL channel binding
+const LDAP_SASL_CBINDING_NONE = LDAP_OPT_X_SASL_CBINDING_NONE;
+
+//! Use the TLS unique channel binding type when supported by the LDAP library
+const LDAP_SASL_CBINDING_TLS_UNIQUE = LDAP_OPT_X_SASL_CBINDING_TLS_UNIQUE;
+
+//! Use the TLS server endpoint channel binding type
+const LDAP_SASL_CBINDING_TLS_ENDPOINT = LDAP_OPT_X_SASL_CBINDING_TLS_ENDPOINT;
+
+//! SASL security property: disallow plaintext mechanisms
+const LDAP_SASL_SEC_NOPLAINTEXT = SASL_SEC_NOPLAINTEXT;
+
+//! SASL security property: disallow mechanisms susceptible to active attacks
+const LDAP_SASL_SEC_NOACTIVE = SASL_SEC_NOACTIVE;
+
+//! SASL security property: disallow mechanisms susceptible to dictionary attacks
+const LDAP_SASL_SEC_NODICTIONARY = SASL_SEC_NODICTIONARY;
+
+//! SASL security property: require forward secrecy
+const LDAP_SASL_SEC_FORWARD_SECRECY = SASL_SEC_FORWARD_SECRECY;
+
+//! SASL security property: disallow anonymous mechanisms
+const LDAP_SASL_SEC_NOANONYMOUS = SASL_SEC_NOANONYMOUS;
+
+//! SASL security property: require mutual authentication
+const LDAP_SASL_SEC_MUTUAL_AUTH = SASL_SEC_MUTUAL_AUTH;
+///@}
+
 /** @defgroup ldap_constants LDAP Constants
  */
 ///@{
@@ -289,6 +322,13 @@ $ldap.saslBind(("mechanism": "DIGEST-MD5", "authcid": "user", "password": "secre
     - \c "authzid": (optional string) the authorization identity (for proxy authorization)
     - \c "realm": (optional string) the SASL realm
     - \c "password": (optional string) the password/credentials
+    - \c "secprops": (optional string) Cyrus SASL security properties, for example \c "minssf=128,maxssf=256,noanonymous"
+    - \c "ssf-min": (optional integer) minimum SASL security strength factor
+    - \c "ssf-max": (optional integer) maximum SASL security strength factor
+    - \c "maxbufsize": (optional integer) maximum SASL security-layer buffer size
+    - \c "external-ssf": (optional integer) external TLS security strength factor
+    - \c "nocanon": (optional boolean) disables SASL host canonicalization when True
+    - \c "channel-binding": (optional string or integer) SASL channel binding policy; strings can be \c "none", \c "tls-unique", or \c "tls-endpoint"
     @param timeout_ms: an optional timeout in milliseconds
 
     @note This method uses ldap_sasl_interactive_bind_s() which is synchronous. The timeout is set on the connection before the call and restored after.
