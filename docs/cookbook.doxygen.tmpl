@@ -1,0 +1,214 @@
+/** @page openldapcookbook Cookbook
+
+    @tableofcontents
+
+    This page contains complete, typed code examples for every LDAP operation
+    supported by the @ref OpenLdap::LdapClient "LdapClient" class. For SASL
+    bind examples (including GSSAPI hardening) see the dedicated
+    @ref openldapsaslguide.
+
+    The openldap module also ships several command-line example programs
+    (@c qldapsearch, @c qldapadd, @c qldapmodify, @c qldapdelete, @c qldappasswd,
+    @c qldapcompare, @c qldapwhoami) installed to @c bin/ alongside the
+    module; they are similar in usage to the standard LDAP tools but format
+    output as Qore hashes.
+
+    @section openldapcookbooksearch Performing an LDAP Search
+    @code{.py}
+%new-style
+%requires openldap
+string uri = "ldap://localhost";
+hash<auto> conn_opts = {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "password",
+    "timeout": 20s,
+    "starttls": True,
+};
+LdapClient ldap(uri, conn_opts);
+hash<auto> search = (
+    "base": "ou=people,dc=example,dc=com",
+    "filter": "(uid=username)",
+    "attributes": ("uidNumber", "gidNumber"),
+    "scope": LDAP_SCOPE_BASE,
+);
+hash result = ldap.search(search);
+    @endcode
+    @see @ref OpenLdap::LdapClient::search() "LdapClient::search()"
+
+    @section openldapcookbookadd Adding an LDAP Entry
+    @code{.py}
+%new-style
+%requires openldap
+string uri = "ldap://localhost";
+hash<auto> conn_opts = {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "password",
+    "timeout": 20s,
+    "starttls": True,
+};
+LdapClient ldap(uri, conn_opts);
+ldap.add("uid=test,ou=people,dc=example,dc=com", {"objectclass": "inetorgperson", "sn": "Test", "cn": "User Test"});
+    @endcode
+    @see @ref OpenLdap::LdapClient::add() "LdapClient::add()"
+
+    @section openldapcookbookmodify Modifying Attributes of an Existing LDAP Entry
+    @code{.py}
+%new-style
+%requires openldap
+string uri = "ldap://localhost";
+hash<auto> conn_opts = {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "password",
+    "timeout": 20s,
+    "starttls": True,
+};
+LdapClient ldap(uri, conn_opts);
+ldap.modify("uid=test,ou=people,dc=example,dc=com", {"mod": LDAP_MOD_REPLACE, "attr": "gidnumber", "value": 1000});
+    @endcode
+    @see @ref OpenLdap::LdapClient::modify() "LdapClient::modify()"
+
+    @section openldapcookbookdelete Deleting an Existing LDAP Entry
+    @code{.py}
+%requires openldap
+string uri = "ldap://localhost";
+hash<auto> conn_opts = {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "password",
+    "timeout": 20s,
+    "starttls": True,
+};
+LdapClient ldap(uri, conn_opts);
+ldap.del("uid=test,ou=people,dc=example,dc=com");
+    @endcode
+    @see @ref OpenLdap::LdapClient::del() "LdapClient::del()"
+
+    @section openldapcookbookcompare Comparing Attribute Values
+    @code{.py}
+%new-style
+%requires openldap
+string uri = "ldap://localhost";
+hash<auto> conn_opts = {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "password",
+};
+LdapClient ldap(uri, conn_opts);
+bool match = ldap.compare("uid=test,ou=people,dc=example,dc=com", "uid", "test");
+printf("Match: %y\n", match);
+    @endcode
+    @see @ref OpenLdap::LdapClient::compare() "LdapClient::compare()"
+
+    @section openldapcookbookrename Renaming an LDAP Entry
+    @code{.py}
+%new-style
+%requires openldap
+string uri = "ldap://localhost";
+hash<auto> conn_opts = {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "password",
+};
+LdapClient ldap(uri, conn_opts);
+ldap.rename("uid=oldname,ou=people,dc=example,dc=com", "uid=newname", "ou=people,dc=example,dc=com");
+    @endcode
+    @see @ref OpenLdap::LdapClient::rename() "LdapClient::rename()"
+
+    @section openldapcookbookpasswd Changing a User's Password
+    @code{.py}
+%new-style
+%requires openldap
+string uri = "ldap://localhost";
+hash<auto> conn_opts = {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "password",
+};
+LdapClient ldap(uri, conn_opts);
+ldap.passwd("uid=test,ou=people,dc=example,dc=com", "oldpassword", "newpassword");
+    @endcode
+    @see @ref OpenLdap::LdapClient::passwd() "LdapClient::passwd()"
+
+    @section openldapcookbookpaged Paged Search (for directories with size limits)
+    @code{.py}
+%modern
+%requires openldap
+LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
+# The page-size option automatically handles RFC 2696 paged results
+hash<auto> all_entries = ldap.search({
+    "base": "dc=example,dc=com",
+    "filter": "(objectClass=person)",
+    "page-size": 500,
+});
+    @endcode
+
+    @section openldapcookbookcontrols Using Server Controls
+    @code{.py}
+%modern
+%requires openldap
+LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
+# Pass server controls with any operation
+hash<auto> result = ldap.search({
+    "base": "dc=example,dc=com",
+    "filter": "(objectClass=*)",
+}, NOTHING, ({
+    "oid": LDAP_CONTROL_MANAGEDSAIT,
+    "critical": True,
+},));
+    @endcode
+
+    @section openldapcookbookextop Extended Operations (Who Am I?)
+    @code{.py}
+%modern
+%requires openldap
+LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
+hash<auto> result = ldap.extendedOp(LDAP_EXOP_WHO_AM_I);
+if (exists result.value) {
+    printf("Bound as: %s\n", result.value.toString("UTF-8"));
+}
+    @endcode
+    @see @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()"
+
+    @section openldapcookbookbinary Binary Attribute Handling
+    @code{.py}
+%modern
+%requires openldap
+# Known binary attributes (jpegPhoto, userCertificate, etc.) are automatically
+# returned as binary type. Additional binary attributes can be specified:
+LdapClient ldap("ldap://localhost", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+    "binary-attributes": ("customBinaryAttr",),
+});
+# Per-search override:
+hash<auto> result = ldap.search({
+    "base": "dc=example,dc=com",
+    "filter": "(uid=test)",
+    "binary-attributes": ("thumbnailPhoto",),
+});
+    @endcode
+
+    @section openldapcookbooktxn LDAP Transactions (RFC 5805)
+    @code{.py}
+%modern
+%requires openldap
+%requires LdapHelper
+
+LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
+
+# RAII transaction — auto-aborts if exception is thrown before commit
+{
+    LdapTransaction txn(ldap);
+    list<hash<auto>> ctrls = txn.getControls();
+
+    # all operations are atomic
+    ldap.add("uid=user1,ou=people,dc=example,dc=com", {
+        "objectClass": "inetOrgPerson", "sn": "User1", "cn": "User 1",
+    }, NOTHING, ctrls);
+    ldap.add("uid=user2,ou=people,dc=example,dc=com", {
+        "objectClass": "inetOrgPerson", "sn": "User2", "cn": "User 2",
+    }, NOTHING, ctrls);
+
+    txn.commit();  # atomic: both succeed or both roll back
+}
+    @endcode
+    @note The server must support RFC 5805. Check rootDSE \c supportedExtension for OID 1.3.6.1.1.21.1.
+    @see @ref OpenLdap::LdapClient::txnStart() "LdapClient::txnStart()"
+    @see @ref OpenLdap::LdapClient::txnEnd() "LdapClient::txnEnd()"
+*/

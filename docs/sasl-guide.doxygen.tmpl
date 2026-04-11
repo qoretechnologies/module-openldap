@@ -1,0 +1,131 @@
+/** @page openldapsaslguide SASL Authentication Guide
+
+    @tableofcontents
+
+    This page covers SASL bind configuration for the openldap module:
+    mechanism selection, hardening options for GSSAPI and enterprise LDAP
+    deployments, and a complete reference for every
+    @ref OpenLdap::LdapClient::saslBind() "saslBind()" option.
+
+    @section openldapsaslguidemechanisms Mechanism Overview
+
+    The openldap module supports any SASL mechanism provided by the linked
+    Cyrus SASL library. The most common choices are:
+
+    - <b>GSSAPI</b> — Kerberos 5 authentication. The standard choice for
+      Active Directory, FreeIPA, and enterprise LDAP with single sign-on.
+      Requires a valid Kerberos ticket cache (obtain via @c kinit).
+    - <b>EXTERNAL</b> — TLS client-certificate authentication. Use when the
+      identity is proven by a mutual-TLS handshake and no bind password
+      applies. Combine with @c starttls or an @c ldaps:// URI.
+    - <b>SCRAM-SHA-256</b> / <b>SCRAM-SHA-1</b> — modern password-based
+      challenge-response (RFC 5802). Preferred over DIGEST-MD5 for new
+      deployments.
+    - <b>DIGEST-MD5</b> — legacy challenge-response. Still supported by most
+      servers but deprecated by RFC 6331. Avoid for new work.
+    - <b>PLAIN</b> — credentials sent in cleartext inside the SASL envelope.
+      Only acceptable inside an established TLS channel.
+
+    @section openldapsaslguidebasic Basic SASL Bind
+
+    @code{.py}
+%modern
+%requires openldap
+LdapClient ldap("ldap://localhost");
+ldap.saslBind({
+    "mechanism": "DIGEST-MD5",
+    "authcid": "username",
+    "password": "secret",
+    "realm": "EXAMPLE.COM",
+});
+    @endcode
+
+    @section openldapsaslguidehardened Hardened SASL/GSSAPI Bind
+
+    The example below shows a hardened GSSAPI bind against Active Directory
+    over LDAPS. Channel binding defends against credential relay; the
+    security properties and SSF floors force strong integrity and
+    confidentiality protection; disabling host canonicalization prevents
+    DNS-based service principal spoofing.
+
+    @code{.py}
+%modern
+%requires openldap
+LdapClient ldap("ldaps://ad.example.com");
+ldap.saslBind({
+    "mechanism": "GSSAPI",
+    "channel-binding": "tls-endpoint",
+    "secprops": "minssf=128,maxssf=256,noanonymous",
+    "ssf-min": 128,
+    "ssf-max": 256,
+    "nocanon": True,
+});
+    @endcode
+
+    @section openldapsaslguideoptions saslBind() Option Reference
+
+    The @ref OpenLdap::LdapClient::saslBind() "saslBind()" method accepts the
+    following options in the @c opts hash:
+
+    |!Option|!Type|!Description
+    |\c "mechanism"|string|SASL mechanism name (required) — e.g. \c "GSSAPI", \c "DIGEST-MD5", \c "EXTERNAL", \c "SCRAM-SHA-256"
+    |\c "authcid"|string|authentication identity (username)
+    |\c "authzid"|string|authorization identity (for proxy authorization)
+    |\c "realm"|string|SASL realm
+    |\c "password"|string|password / credentials
+    |\c "secprops"|string|Cyrus SASL security properties — e.g. \c "minssf=128,maxssf=256,noanonymous"
+    |\c "ssf-min"|int|minimum SASL security strength factor (0 disables the floor)
+    |\c "ssf-max"|int|maximum SASL security strength factor
+    |\c "maxbufsize"|int|maximum SASL security-layer buffer size in bytes
+    |\c "external-ssf"|int|external TLS security strength factor (for @c EXTERNAL combined with @c starttls / @c ldaps)
+    |\c "nocanon"|bool|disables SASL host canonicalization when @c True — prevents DNS-based service principal spoofing against Kerberos
+    |\c "channel-binding"|string or int|SASL channel binding policy — \c "none", \c "tls-unique", \c "tls-endpoint", or the integer @ref OpenLdap::LDAP_SASL_CBINDING_NONE "LDAP_SASL_CBINDING_*" constant value; requires OpenLDAP 2.6+
+
+    Channel binding keyword aliases accepted by @c "channel-binding":
+    \c "tls-endpoint" is also accepted as \c "tls-server-end-point" for
+    compatibility with RFC 5929 terminology.
+
+    @section openldapsaslguideconstants SASL Constants
+
+    The module exports the following SASL constants in the
+    @ref OpenLdap namespace (see @ref ldap_sasl_constants):
+
+    - @ref OpenLdap::LDAP_SASL_CBINDING_NONE "LDAP_SASL_CBINDING_NONE",
+      @ref OpenLdap::LDAP_SASL_CBINDING_TLS_UNIQUE "LDAP_SASL_CBINDING_TLS_UNIQUE",
+      @ref OpenLdap::LDAP_SASL_CBINDING_TLS_ENDPOINT "LDAP_SASL_CBINDING_TLS_ENDPOINT"
+      — channel binding type values (sentinel @c -1 on OpenLDAP libraries
+      older than 2.6)
+    - @ref OpenLdap::LDAP_SASL_SEC_NOPLAINTEXT "LDAP_SASL_SEC_NOPLAINTEXT",
+      @ref OpenLdap::LDAP_SASL_SEC_NOACTIVE "LDAP_SASL_SEC_NOACTIVE",
+      @ref OpenLdap::LDAP_SASL_SEC_NODICTIONARY "LDAP_SASL_SEC_NODICTIONARY",
+      @ref OpenLdap::LDAP_SASL_SEC_FORWARD_SECRECY "LDAP_SASL_SEC_FORWARD_SECRECY",
+      @ref OpenLdap::LDAP_SASL_SEC_NOANONYMOUS "LDAP_SASL_SEC_NOANONYMOUS",
+      @ref OpenLdap::LDAP_SASL_SEC_MUTUAL_AUTH "LDAP_SASL_SEC_MUTUAL_AUTH"
+      — Cyrus SASL security property bit values
+
+    @section openldapsaslguiderecommendations Hardening Recommendations
+
+    For production enterprise LDAP (Active Directory, FreeIPA, 389 Directory
+    Server) the recommended configuration is:
+
+    - Use \c ldaps:// or enable \c "starttls" in the connection options so
+      all SASL-layer traffic runs inside TLS
+    - Use @c GSSAPI (or \c EXTERNAL where client certificates are issued)
+    - Set @c "channel-binding" to \c "tls-endpoint" to bind the SASL
+      authentication to the TLS channel — defeats credential relay attacks
+    - Set @c "secprops" to at least \c "minssf=128,noanonymous,noplaintext"
+    - Set @c "nocanon" to @c True on Kerberos deployments to prevent
+      hostname rewriting through forward DNS lookups (which an attacker can
+      influence)
+    - Set @c "ssf-min" to a non-zero value (typically @c 128) to force a
+      minimum integrity/confidentiality floor even when the server would
+      otherwise accept weaker protection
+
+    @note SASL channel binding requires OpenLDAP 2.6 or later at both build
+    and run time. On older client libraries, passing the @c "channel-binding"
+    option to @c saslBind() raises @c LDAP-SASL-BIND-ERROR with a message
+    indicating the feature is unavailable.
+
+    @see @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
+    @see @ref ldap_sasl_constants
+*/

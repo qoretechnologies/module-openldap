@@ -1,0 +1,165 @@
+/** @page openldaphelpermodules User Modules
+
+    @tableofcontents
+
+    The openldap module ships a family of user modules that build on top of
+    the core @ref OpenLdap::LdapClient "LdapClient" binary class:
+
+    - @ref openldaphelpermodulespool "LdapConnectionPool" — thread-safe
+      connection pooling with health checks and retry
+    - @ref openldaphelpermodulesclasses "LdapHelper" — object-oriented
+      entry, iterator, DN, URL, and schema helpers
+    - @ref openldaphelpermodulesasync "LdapAsync" — non-blocking parallel
+      operations via Future/Promise
+    - @ref openldaphelpermodulesldif "LdifHelper" — RFC 2849 LDIF import / export
+    - @ref openldaphelpermodulesad "LdapActiveDirectory" — AD-specific
+      features (paged search, range retrieval, GUID/SID decoding)
+
+    @section openldaphelpermodulespool Connection Pooling
+
+    The \c LdapConnectionPool module provides efficient connection pooling
+    for multi-threaded applications:
+
+    @code{.py}
+%new-style
+%requires LdapConnectionPool
+
+# Create a connection pool
+LdapConnectionPool pool("ldap://localhost:389", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+}, {
+    "min_connections": 2,
+    "max_connections": 10,
+    "idle_timeout": 300s,
+});
+
+# Use the pool with automatic connection management
+pool.withConnection(sub(LdapClient ldap) {
+    hash<auto> result = ldap.search({
+        "base": "dc=example,dc=com",
+        "filter": "(objectClass=*)"
+    });
+});
+
+# Or get/release connections manually
+LdapClient ldap = pool.get();
+# ... use connection ...
+pool.release(ldap);
+    @endcode
+
+    @section openldaphelpermodulesclasses Helper Classes
+
+    The \c LdapHelper module provides convenient classes for working with
+    LDAP data:
+
+    - \c LdapEntry — object-oriented wrapper for LDAP entries
+    - \c LdapSearchIterator — iterator for efficient result processing
+    - \c LdapDn — RFC 4514-compliant Distinguished Name parser with escaping support
+    - \c LdapClientHelper — extended client with convenience methods (including \c whoAmI())
+    - \c LdapUrl — RFC 4516 LDAP URL parser
+    - \c LdapSchema — LDAP schema introspection (objectClasses, attributeTypes)
+
+    @code{.py}
+%new-style
+%requires LdapHelper
+
+LdapClientHelper helper("ldap://localhost:389", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+});
+
+# Check if connection is working
+if (helper.ping()) {
+    printf("Connection OK\n");
+}
+
+# Get a single entry
+*LdapEntry entry = helper.getEntry("uid=testuser,ou=people,dc=example,dc=com");
+if (entry) {
+    printf("User: %s\n", entry.getAttributeString("cn"));
+    printf("Email: %s\n", entry.getAttributeString("mail"));
+
+    if (entry.hasObjectClass("posixAccount")) {
+        printf("UID Number: %s\n", entry.getAttributeString("uidNumber"));
+    }
+}
+
+# Iterate over search results
+LdapSearchIterator iter = helper.searchIterator({
+    "base": "ou=people,dc=example,dc=com",
+    "filter": "(objectClass=inetOrgPerson)",
+});
+while (iter.next()) {
+    LdapEntry e = iter.getValue();
+    printf("Found: %s\n", e.dn);
+}
+    @endcode
+
+    @section openldaphelpermodulesasync Asynchronous Operations
+
+    The \c LdapAsync module provides non-blocking LDAP operations using the
+    %Qore Future/Promise pattern:
+
+    @code{.py}
+%modern
+%requires LdapAsync
+
+LdapAsyncClient async("ldap://localhost:389", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+});
+
+# fire off parallel searches
+LdapFuture f1 = async.searchAsync({"base": "ou=people,dc=example,dc=com", "filter": "(uid=user1)"});
+LdapFuture f2 = async.searchAsync({"base": "ou=groups,dc=example,dc=com", "filter": "(cn=admins)"});
+
+# collect results (blocks until each completes)
+hash<auto> users = f1.get(30s);
+hash<auto> groups = f2.get(30s);
+    @endcode
+
+    @section openldaphelpermodulesldif LDIF Import / Export
+
+    The \c LdifHelper module provides LDIF (RFC 2849) reading and writing:
+
+    @code{.py}
+%modern
+%requires LdifHelper
+
+# Read entries from an LDIF file
+LdifReader reader("/path/to/data.ldif");
+while (*hash<LdifEntryInfo> entry = reader.readEntry()) {
+    printf("DN: %s\n", entry.dn);
+}
+
+# Write entries to an LDIF file
+LdifWriter writer("/path/to/output.ldif");
+writer.writeEntry("dc=example,dc=com", {"objectClass": ("top", "domain"), "dc": "example"});
+    @endcode
+
+    @section openldaphelpermodulesad Active Directory Compatibility
+
+    The \c LdapActiveDirectory module provides Active Directory-specific
+    features:
+
+    @code{.py}
+%modern
+%requires LdapActiveDirectory
+
+ActiveDirectoryClient ad("ldap://dc.example.com:389", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+});
+
+# Automatic paged search (handles AD's 1000-entry limit)
+hash<auto> results = ad.searchPaged({"base": "dc=example,dc=com", "filter": "(objectClass=user)"});
+
+# Range retrieval for large groups
+list<auto> members = ad.getRangedAttribute("cn=LargeGroup,dc=example,dc=com", "member");
+
+# Decode binary Active Directory attributes
+string guid = ActiveDirectoryClient::decodeObjectGUID(binary_guid_value);
+string sid = ActiveDirectoryClient::decodeObjectSid(binary_sid_value);
+    @endcode
+*/

@@ -1,0 +1,85 @@
+/** @page openldapreleasenotes Release Notes
+
+    @tableofcontents
+
+    @section openldap_rel20 openldap Module 2.0
+
+    <b>New Features:</b>
+    - added LDAP transaction support (RFC 5805) via @ref OpenLdap::LdapClient::txnStart()
+      "txnStart()" / @ref OpenLdap::LdapClient::txnEnd() "txnEnd()" with RAII \c LdapTransaction class
+    - added server and client controls support on all LDAP operations; see @ref ldap_control_constants
+    - added SASL authentication with any mechanism (GSSAPI, DIGEST-MD5, EXTERNAL, SCRAM, etc.) via
+      @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
+    - added SASL hardening controls for GSSAPI and enterprise LDAP deployments: channel binding,
+      security properties, SSF min/max, external SSF, maximum buffer size, and canonicalization control
+      (see @ref openldapsaslguide)
+    - added paged results (RFC 2696) via the \c "page-size" search option; handles Active Directory's
+      1000-entry limit transparently
+    - added generic extended operations via @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()";
+      see @ref ldap_extop_constants for common OIDs
+    - added binary attribute support with built-in known-binary attribute list and opt-in via
+      \c "binary-attributes" and \c "all-binary" options
+    - added RFC 4514-compliant DN parsing with escaped character support, multi-valued RDNs,
+      and \c escape() / \c unescape() static methods
+    - added \c LdapAsync module with \c LdapFuture and \c LdapAsyncClient for non-blocking parallel
+      LDAP operations using the %Qore Future/Promise pattern
+    - added \c LdifHelper module with \c LdifReader and \c LdifWriter for LDIF (RFC 2849) import/export
+    - added \c LdapActiveDirectory module with \c ActiveDirectoryClient for AD-specific features:
+      auto-paged search, range retrieval, objectGUID/objectSid decoding, deleted object search
+    - added \c LdapSchema class for LDAP schema introspection (objectClasses, attributeTypes)
+    - added \c LdapUrl class for RFC 4516 LDAP URL parsing
+    - added \c whoAmI() convenience method to \c LdapClientHelper
+    - added connection pool health checks, automatic reconnection, and \c withConnectionRetry() with
+      configurable retry policy
+    - added 14 LDAP control OID constants and 5 extended operation OID constants
+    - promoted Cyrus SASL to a hard build-time requirement and added a configure-time probe for
+      OpenLDAP channel binding support
+
+    <b>Bug Fixes:</b>
+    - <b>critical fix</b>: fixed \c copy() constructor not re-binding to the LDAP server because the
+      bind parameters hash was never saved after a successful bind
+    - updated copyright to 2026
+
+    @section openldap_rel13 openldap Module 1.3
+    - added support for interruptible I/O for graceful termination of sandboxed programs; interrupt
+      checks are performed before all LDAP operations (connect, bind, search, add, modify, delete,
+      compare, rename, passwd)
+      (<a href="https://github.com/qoretechnologies/qore/issues/5116">issue 5116</a>)
+    - <b>critical fix</b>: fixed null-termination bug in QoreLDAPMod that caused segfaults
+      when adding or modifying entries with multi-valued attributes (lists)
+    - fixed unreachable code in del() method
+    - fixed return type issues in compare() and isSecure() methods
+    - added NULL check for ldap_get_dn() result in search
+    - updated copyright years
+    - updated README with correct build requirements
+    - added comprehensive automated test suite with 35+ test cases
+    - added LdapConnectionPool module for thread-safe connection pooling
+    - added LdapHelper module with LdapEntry, LdapSearchIterator, LdapDn, and LdapClientHelper classes
+    - added ping/health check functionality via LdapClientHelper
+    - updated GitLab CI to use k8s runner
+
+    @section openldap_rel123 openldap Module 1.2.3
+    - fixed compiling with \c qpp from %Qore 1.12.4+
+
+    @section openldap_rel122 openldap Module 1.2.2
+    - fixed compiling on Fedora 36+ and systems where libldap_r is deprecated
+      (<a href="https://github.com/qorelanguage/qore/issues/4490">issue 4490</a>)
+
+    @section openldap_rel121 openldap Module 1.2.1
+    - fixed memory leaks in freeing extension strings
+      (<a href="https://github.com/qorelanguage/qore/issues/4418">issue 4418</a>)
+
+    @section openldap_rel12 openldap Module 1.2
+    - updated build to use the latest %Qore APIs
+
+    @section openldap_rel111 openldap Module 1.1.1
+    - fixed a bug where incorrect class destructor is called in openldap module
+      (<a href="https://github.com/qorelanguage/qore/issues/1174">issue 1174</a>)
+
+    @section openldap_rel11 openldap Module 1.1
+    - disable openssl cleanup in the %Qore library since the openldap module makes openssl cleanup calls and calling those routines twice can result in segfaults
+    - updated example/test scripts to use %%strict-args
+
+    @section openldap_rel10 openldap Module 1.0
+    - Initial release of the module.
+*/

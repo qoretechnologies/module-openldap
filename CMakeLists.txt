@@ -76,6 +76,11 @@ set(module_name openldap)
 
 set(QORE_DOX_TMPL_SRC
   docs/mainpage.doxygen.tmpl
+  docs/getting-started.doxygen.tmpl
+  docs/cookbook.doxygen.tmpl
+  docs/sasl-guide.doxygen.tmpl
+  docs/helper-modules.doxygen.tmpl
+  docs/release-notes.doxygen.tmpl
 )
 
 qore_wrap_qpp_value(QPP_CPP_SRC METALIST QPP_META_SRC ${QPP_SRC})

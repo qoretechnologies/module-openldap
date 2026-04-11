@@ -1,0 +1,59 @@
+/** @page openldapgettingstarted Getting Started
+
+    @tableofcontents
+
+    This page shows the fastest path to a working LDAP client with the Qore
+    openldap module. See @ref openldapcookbook for full examples of every
+    operation and @ref openldapsaslguide for SASL, GSSAPI, and hardened-bind
+    configuration.
+
+    @section openldapgettingstartedprereqs Prerequisites
+
+    - <b>%Qore 2.0+</b> with @c %modern enabled
+    - <b>OpenLDAP</b> client libraries installed (OpenLDAP 2.6+ is required
+      for SASL channel binding — see @ref openldapsaslguide)
+    - <b>Cyrus SASL</b> development headers — the module hard-depends on
+      @c \<sasl/sasl.h\>
+    - A reachable LDAP server and valid bind credentials
+    - The @c openldap binary module loaded: @c %requires @c openldap
+
+    @section openldapgettingstartedhello Minimal Example
+
+    The example below connects to an LDAP server, performs a subtree search,
+    and prints the results:
+
+    @code{.py}
+%modern
+%requires openldap
+
+LdapClient ldap("ldap://localhost", {
+    "binddn": "cn=admin,dc=example,dc=com",
+    "password": "admin",
+    "timeout": 20s,
+});
+
+hash<auto> result = ldap.search({
+    "base": "dc=example,dc=com",
+    "filter": "(objectClass=person)",
+    "scope": LDAP_SCOPE_SUBTREE,
+    "attributes": ("uid", "cn", "mail"),
+});
+
+foreach string dn in (keys result) {
+    printf("DN: %s\n", dn);
+    printf("  cn: %s\n", result{dn}.cn);
+}
+    @endcode
+
+    @note The @ref OpenLdap::LdapClient "LdapClient" class is thread-safe and
+    wraps each request in a mutual-exclusion lock. For multi-threaded
+    applications, the @ref openldaphelpermodules "LdapConnectionPool" helper
+    module provides efficient per-thread connection reuse.
+
+    @section openldapgettingstartednext Next Steps
+
+    - @ref openldapcookbook — complete examples for every LDAP operation
+    - @ref openldapsaslguide — SASL authentication and hardening
+    - @ref openldaphelpermodules — connection pooling, async, LDIF, Active Directory
+    - @ref OpenLdap::LdapClient "LdapClient class reference"
+*/

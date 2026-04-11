@@ -4,500 +4,103 @@
 
     @section openldapintro Introduction
 
-    The openldap module exposes functionality from the <a href="http://www.openldap.org">openldap</a> library as a Qore API, allowing qore programs to communicate with LDAP servers.
+    The openldap module exposes functionality from the
+    <a href="http://www.openldap.org">OpenLDAP</a> library as a %Qore API,
+    allowing %Qore programs to communicate with LDAP servers.
 
-    This module is released under the <a href="http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html">LGPL 2.1</a> and is tagged as such in the module's header (meaning it can be loaded unconditionally regardless of how the Qore library was initialized).
+    This module is released under the
+    <a href="http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html">LGPL 2.1</a>
+    and is tagged as such in the module's header (meaning it can be loaded
+    unconditionally regardless of how the %Qore library was initialized).
 
-    Like all Qore components, the openldap module is thread-safe.  The @ref OpenLdap::LdapClient class represents a single network connection to the LDAP server and therefore wraps requests in a mutual-exclusion lock to ensure atomicity and thread-safety.
+    Like all %Qore components, the openldap module is thread-safe. The
+    @ref OpenLdap::LdapClient "LdapClient" class represents a single network
+    connection to the LDAP server and wraps every request in a
+    mutual-exclusion lock to ensure atomicity and thread-safety.
 
-    Asynchronous APIs are used internally to enforce time limits for each LDAP operation.  The default timeout for all LDAP operations is set in the @ref OpenLdap::LdapClient::constructor() "LdapClient::constructor()" method with the \c "timeout" option, however each method requiring communication with the LDAP server also takes an optional timeout argument that allows the default timeout to be overridden for specific calls.  If no \c "timeout" option is specifically set in the @ref OpenLdap::LdapClient::constructor() "LdapClient::constructor()", the default timeout for new objects is automatically set to 60 seconds.
+    Asynchronous APIs are used internally to enforce time limits on each
+    LDAP operation. The default timeout for all LDAP operations is set in
+    the @ref OpenLdap::LdapClient::constructor() "LdapClient::constructor()"
+    method via the \c "timeout" option; each method requiring server
+    communication also accepts an optional per-call timeout. If no
+    \c "timeout" option is supplied to the constructor, the default is
+    60 seconds.
+
+    Key capabilities:
+    - full typed client API through
+      @ref OpenLdap::LdapClient "OpenLdap::LdapClient" — search, add,
+      modify, delete, compare, rename, password change, extended operations
+    - SASL bind with any mechanism (GSSAPI, EXTERNAL, SCRAM, DIGEST-MD5, …)
+      and GSSAPI hardening controls including TLS channel binding — see
+      @ref openldapsaslguide
+    - paged results (RFC 2696) via the \c "page-size" search option; handles
+      Active Directory's 1000-entry limit transparently
+    - server and client controls on all LDAP operations; see
+      @ref ldap_control_constants
+    - binary attribute support with a built-in known-binary list and
+      opt-in @c "binary-attributes" / @c "all-binary" options
+    - LDAP transactions (RFC 5805) with RAII helper class
+    - user modules for connection pooling, async operations, LDIF
+      import/export, and Active Directory compatibility — see
+      @ref openldaphelpermodules
+    - sandboxed and interruptible I/O for graceful termination of
+      long-running operations
 
     <b>Overview of Operations Supported by the LdapClient Class</b>
     |!Operation|!Method|!Description
     |search|@ref OpenLdap::LdapClient::search() "LdapClient::search()"|Search for entries and attributes; supports paged results via \c "page-size" option
     |add|@ref OpenLdap::LdapClient::add() "LdapClient::add()"|Add entries to the Directory Information Tree
     |modify|@ref OpenLdap::LdapClient::modify() "LdapClient::modify()"|Modify existing entries
-    |delete|@ref OpenLdap::LdapClient::del() "LdapClient::del()"|Delete existing Entries
+    |delete|@ref OpenLdap::LdapClient::del() "LdapClient::del()"|Delete existing entries
     |compare|@ref OpenLdap::LdapClient::compare() "LdapClient::compare()"|Compare attribute values
     |rename|@ref OpenLdap::LdapClient::rename() "LdapClient::rename()"|Rename or move entries to another location in the Directory Information Tree
-    |change password|@ref OpenLdap::LdapClient::passwd() "LdapClient::passwd()"|Changes the LDAP password for the given user
+    |change password|@ref OpenLdap::LdapClient::passwd() "LdapClient::passwd()"|Change the LDAP password for a given user
     |SASL bind|@ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"|SASL bind with any mechanism (GSSAPI, DIGEST-MD5, EXTERNAL, etc.)
     |extended operation|@ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()"|Perform generic LDAP extended operations (Who Am I?, Cancel, etc.)
 
-    The underlying %LDAP functionality is provided by the <a href="http://www.openldap.org">openldap library</a>.
-
-    @section openldap_installation Installation notes
-
-    If you intend to use the <i>oracle</i> module along with <i>openldap</i> on Linux, then you will probably be facing the issue https://github.com/qorelanguage/qore/issues/1043.
-    Currently we don't have a generic solution for the issue, but there is a work-around using \c LDPRELOAD.
-
-    @section openldap_helper_modules Helper Modules
-
-    The openldap module includes additional helper modules for common use cases:
-
-    @subsection openldap_connection_pool Connection Pooling
-
-    The \c LdapConnectionPool module provides efficient connection pooling for multi-threaded applications:
-
-    @code{.py}
-%new-style
-%requires LdapConnectionPool
-
-# Create a connection pool
-LdapConnectionPool pool("ldap://localhost:389", {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "admin",
-}, {
-    "min_connections": 2,
-    "max_connections": 10,
-    "idle_timeout": 300s,
-});
-
-# Use the pool with automatic connection management
-pool.withConnection(sub(LdapClient ldap) {
-    hash<auto> result = ldap.search({
-        "base": "dc=example,dc=com",
-        "filter": "(objectClass=*)"
-    });
-});
-
-# Or get/release connections manually
-LdapClient ldap = pool.get();
-# ... use connection ...
-pool.release(ldap);
-    @endcode
-
-    @subsection openldap_helper_classes Helper Classes
-
-    The \c LdapHelper module provides convenient classes for working with LDAP data:
-
-    - \c LdapEntry - Object-oriented wrapper for LDAP entries
-    - \c LdapSearchIterator - Iterator for efficient result processing
-    - \c LdapDn - RFC 4514-compliant Distinguished Name parser with escaping support
-    - \c LdapClientHelper - Extended client with convenience methods (including \c whoAmI())
-    - \c LdapUrl - RFC 4516 LDAP URL parser
-    - \c LdapSchema - LDAP schema introspection (objectClasses, attributeTypes)
-
-    @code{.py}
-%new-style
-%requires LdapHelper
-
-LdapClientHelper helper("ldap://localhost:389", {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "admin",
-});
-
-# Check if connection is working
-if (helper.ping()) {
-    printf("Connection OK\n");
-}
-
-# Get a single entry
-*LdapEntry entry = helper.getEntry("uid=testuser,ou=people,dc=example,dc=com");
-if (entry) {
-    printf("User: %s\n", entry.getAttributeString("cn"));
-    printf("Email: %s\n", entry.getAttributeString("mail"));
-
-    if (entry.hasObjectClass("posixAccount")) {
-        printf("UID Number: %s\n", entry.getAttributeString("uidNumber"));
-    }
-}
-
-# Iterate over search results
-LdapSearchIterator iter = helper.searchIterator({
-    "base": "ou=people,dc=example,dc=com",
-    "filter": "(objectClass=inetOrgPerson)",
-});
-while (iter.next()) {
-    LdapEntry e = iter.getValue();
-    printf("Found: %s\n", e.dn);
-}
-    @endcode
-
-    @subsection openldap_async Asynchronous Operations
-
-    The \c LdapAsync module provides non-blocking LDAP operations using the Qore Future/Promise pattern:
-
-    @code{.py}
-%modern
-%requires LdapAsync
-
-LdapAsyncClient async("ldap://localhost:389", {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "admin",
-});
-
-# fire off parallel searches
-LdapFuture f1 = async.searchAsync({"base": "ou=people,dc=example,dc=com", "filter": "(uid=user1)"});
-LdapFuture f2 = async.searchAsync({"base": "ou=groups,dc=example,dc=com", "filter": "(cn=admins)"});
-
-# collect results (blocks until each completes)
-hash<auto> users = f1.get(30s);
-hash<auto> groups = f2.get(30s);
-    @endcode
-
-    @subsection openldap_ldif LDIF Import/Export
-
-    The \c LdifHelper module provides LDIF (RFC 2849) reading and writing:
-
-    @code{.py}
-%modern
-%requires LdifHelper
-
-# Read entries from an LDIF file
-LdifReader reader("/path/to/data.ldif");
-while (*hash<LdifEntryInfo> entry = reader.readEntry()) {
-    printf("DN: %s\n", entry.dn);
-}
-
-# Write entries to an LDIF file
-LdifWriter writer("/path/to/output.ldif");
-writer.writeEntry("dc=example,dc=com", {"objectClass": ("top", "domain"), "dc": "example"});
-    @endcode
-
-    @subsection openldap_ad Active Directory Compatibility
-
-    The \c LdapActiveDirectory module provides Active Directory-specific features:
-
-    @code{.py}
-%modern
-%requires LdapActiveDirectory
-
-ActiveDirectoryClient ad("ldap://dc.example.com:389", {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "admin",
-});
-
-# Automatic paged search (handles AD's 1000-entry limit)
-hash<auto> results = ad.searchPaged({"base": "dc=example,dc=com", "filter": "(objectClass=user)"});
-
-# Range retrieval for large groups
-list<auto> members = ad.getRangedAttribute("cn=LargeGroup,dc=example,dc=com", "member");
-
-# Decode binary Active Directory attributes
-string guid = ActiveDirectoryClient::decodeObjectGUID(binary_guid_value);
-string sid = ActiveDirectoryClient::decodeObjectSid(binary_sid_value);
-    @endcode
-
-    @section openldap_examples Examples
-
-    The bulk of the LDAP functionality provided by this module is encapsulated in the @ref OpenLdap::LdapClient class.  There are also four example programs included with the openldap module: qldapsearch, qldapmodify, qldapdelete, qldapadd, and qldappasswd.  These are somewhat similar in usage to the standard LDAP commands, however are designed to provide user-friendly examples of command-line Qore-based LDAP integration, and, for example, do not support or work with LDIF formatted data, etc (for example, qldapsearch outputs the results of a search as a multi-line formatted Qore hash).
-
-    @par Performing an LDAP Search
-    @code{.py}
-%new-style
-%requires openldap
-string uri = "ldap://localhost";
-hash<auto> conn_opts = {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "password",
-    "timeout": 20s,
-    "starttls": True,
-};
-LdapClient ldap(uri, conn_opts);
-hash<auto> search = (
-    "base": "ou=people,dc=example,dc=com",
-    "filter": "(uid=username)",
-    "attributes": ("uidNumber", "gidNumber"),
-    "scope": LDAP_SCOPE_BASE,
-);
-hash result = ldap.search(search);
-    @endcode
-    @see @ref OpenLdap::LdapClient::search() "LdapClient::search()"
-
-    @par Adding an LDAP Entry
-    @code{.py}
-%new-style
-%requires openldap
-string uri = "ldap://localhost";
-hash<auto> conn_opts = {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "password",
-    "timeout": 20s,
-    "starttls": True,
-};
-LdapClient ldap(uri, conn_opts);
-ldap.add("uid=test,ou=people,dc=example,dc=com", {"objectclass": "inetorgperson", "sn": "Test", "cn": "User Test"});
-    @endcode
-    @see @ref OpenLdap::LdapClient::add() "LdapClient::add()"
-
-    @par Modifying Attributes of an Existing LDAP Entry
-    @code{.py}
-%new-style
-%requires openldap
-string uri = "ldap://localhost";
-hash<auto> conn_opts = {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "password",
-    "timeout": 20s,
-    "starttls": True,
-};
-LdapClient ldap(uri, conn_opts);
-ldap.modify("uid=test,ou=people,dc=example,dc=com", {"mod": LDAP_MOD_REPLACE, "attr": "gidnumber", "value": 1000});
-    @endcode
-    @see @ref OpenLdap::LdapClient::modify() "LdapClient::modify()"
-
-    @par Deleting an Existing LDAP Entry
-    @code{.py}
-%requires openldap
-string uri = "ldap://localhost";
-hash<auto> conn_opts = {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "password",
-    "timeout": 20s,
-    "starttls": True,
-};
-LdapClient ldap(uri, conn_opts);
-ldap.del("uid=test,ou=people,dc=example,dc=com");
-    @endcode
-    @see @ref OpenLdap::LdapClient::del() "LdapClient::del()"
-
-    @par Comparing Attribute Values
-    @code{.py}
-%new-style
-%requires openldap
-string uri = "ldap://localhost";
-hash<auto> conn_opts = {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "password",
-};
-LdapClient ldap(uri, conn_opts);
-bool match = ldap.compare("uid=test,ou=people,dc=example,dc=com", "uid", "test");
-printf("Match: %y\n", match);
-    @endcode
-    @see @ref OpenLdap::LdapClient::compare() "LdapClient::compare()"
-
-    @par Renaming an LDAP Entry
-    @code{.py}
-%new-style
-%requires openldap
-string uri = "ldap://localhost";
-hash<auto> conn_opts = {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "password",
-};
-LdapClient ldap(uri, conn_opts);
-ldap.rename("uid=oldname,ou=people,dc=example,dc=com", "uid=newname", "ou=people,dc=example,dc=com");
-    @endcode
-    @see @ref OpenLdap::LdapClient::rename() "LdapClient::rename()"
-
-    @par Changing a User's Password
-    @code{.py}
-%new-style
-%requires openldap
-string uri = "ldap://localhost";
-hash<auto> conn_opts = {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "password",
-};
-LdapClient ldap(uri, conn_opts);
-ldap.passwd("uid=test,ou=people,dc=example,dc=com", "oldpassword", "newpassword");
-    @endcode
-    @see @ref OpenLdap::LdapClient::passwd() "LdapClient::passwd()"
-
-    @par SASL Bind (GSSAPI, DIGEST-MD5, EXTERNAL, etc.)
-    @code{.py}
-%modern
-%requires openldap
-LdapClient ldap("ldap://localhost");
-ldap.saslBind({
-    "mechanism": "DIGEST-MD5",
-    "authcid": "username",
-    "password": "secret",
-    "realm": "EXAMPLE.COM",
-});
-    @endcode
-    @see @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
-
-    @par Hardened SASL/GSSAPI Bind
-    @code{.py}
-%modern
-%requires openldap
-LdapClient ldap("ldaps://ad.example.com");
-ldap.saslBind({
-    "mechanism": "GSSAPI",
-    "channel-binding": "tls-endpoint",
-    "secprops": "minssf=128,maxssf=256,noanonymous",
-    "ssf-min": 128,
-    "ssf-max": 256,
-    "nocanon": True,
-});
-    @endcode
-    @see @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
-
-    @par Paged Search (for directories with size limits)
-    @code{.py}
-%modern
-%requires openldap
-LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
-# The page-size option automatically handles RFC 2696 paged results
-hash<auto> all_entries = ldap.search({
-    "base": "dc=example,dc=com",
-    "filter": "(objectClass=person)",
-    "page-size": 500,
-});
-    @endcode
-
-    @par Using Server Controls
-    @code{.py}
-%modern
-%requires openldap
-LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
-# Pass server controls with any operation
-hash<auto> result = ldap.search({
-    "base": "dc=example,dc=com",
-    "filter": "(objectClass=*)",
-}, NOTHING, ({
-    "oid": LDAP_CONTROL_MANAGEDSAIT,
-    "critical": True,
-},));
-    @endcode
-
-    @par Extended Operations (Who Am I?)
-    @code{.py}
-%modern
-%requires openldap
-LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
-hash<auto> result = ldap.extendedOp(LDAP_EXOP_WHO_AM_I);
-if (exists result.value) {
-    printf("Bound as: %s\n", result.value.toString("UTF-8"));
-}
-    @endcode
-    @see @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()"
-
-    @par Binary Attribute Handling
-    @code{.py}
-%modern
-%requires openldap
-# Known binary attributes (jpegPhoto, userCertificate, etc.) are automatically
-# returned as binary type. Additional binary attributes can be specified:
-LdapClient ldap("ldap://localhost", {
-    "binddn": "cn=admin,dc=example,dc=com",
-    "password": "admin",
-    "binary-attributes": ("customBinaryAttr",),
-});
-# Per-search override:
-hash<auto> result = ldap.search({
-    "base": "dc=example,dc=com",
-    "filter": "(uid=test)",
-    "binary-attributes": ("thumbnailPhoto",),
-});
-    @endcode
-
-    @par LDAP Transactions (RFC 5805)
-    @code{.py}
-%modern
-%requires openldap
-%requires LdapHelper
-
-LdapClient ldap("ldap://localhost", {"binddn": "cn=admin,dc=example,dc=com", "password": "admin"});
-
-# RAII transaction — auto-aborts if exception is thrown before commit
-{
-    LdapTransaction txn(ldap);
-    list<hash<auto>> ctrls = txn.getControls();
-
-    # all operations are atomic
-    ldap.add("uid=user1,ou=people,dc=example,dc=com", {
-        "objectClass": "inetOrgPerson", "sn": "User1", "cn": "User 1",
-    }, NOTHING, ctrls);
-    ldap.add("uid=user2,ou=people,dc=example,dc=com", {
-        "objectClass": "inetOrgPerson", "sn": "User2", "cn": "User 2",
-    }, NOTHING, ctrls);
-
-    txn.commit();  # atomic: both succeed or both roll back
-}
-    @endcode
-    @note The server must support RFC 5805. Check rootDSE \c supportedExtension for OID 1.3.6.1.1.21.1.
-    @see @ref OpenLdap::LdapClient::txnStart() "LdapClient::txnStart()"
-    @see @ref OpenLdap::LdapClient::txnEnd() "LdapClient::txnEnd()"
-
-    @section openldap_limitations Limitations
-
-    This module currently has no known functional limitations. All major LDAP operations, controls,
-    SASL authentication, paged results, extended operations, transactions, and asynchronous operations
-    are supported.
-
-    @note LDAP transaction support (RFC 5805) requires server-side support; not all LDAP servers
-    implement this feature.
-
-    @section openldap_release_notes Release Notes
-
-    @subsection openldap_rel20 openldap Module 2.0
-
-    <b>New Features:</b>
-    - added LDAP transaction support (RFC 5805) via @ref OpenLdap::LdapClient::txnStart()
-      "txnStart()" / @ref OpenLdap::LdapClient::txnEnd() "txnEnd()" with RAII \c LdapTransaction class
-    - added server and client controls support on all LDAP operations; see @ref ldap_control_constants
-    - added SASL authentication with any mechanism (GSSAPI, DIGEST-MD5, EXTERNAL, SCRAM, etc.) via
-      @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
-    - added SASL hardening controls for GSSAPI and enterprise LDAP deployments: channel binding,
-      security properties, SSF min/max, external SSF, maximum buffer size, and canonicalization control
-    - added paged results (RFC 2696) via the \c "page-size" search option; handles Active Directory's
-      1000-entry limit transparently
-    - added generic extended operations via @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()";
-      see @ref ldap_extop_constants for common OIDs
-    - added binary attribute support with built-in known-binary attribute list and opt-in via
-      \c "binary-attributes" and \c "all-binary" options
-    - added RFC 4514-compliant DN parsing with escaped character support, multi-valued RDNs,
-      and \c escape() / \c unescape() static methods
-    - added \c LdapAsync module with \c LdapFuture and \c LdapAsyncClient for non-blocking parallel
-      LDAP operations using the Qore Future/Promise pattern
-    - added \c LdifHelper module with \c LdifReader and \c LdifWriter for LDIF (RFC 2849) import/export
-    - added \c LdapActiveDirectory module with \c ActiveDirectoryClient for AD-specific features:
-      auto-paged search, range retrieval, objectGUID/objectSid decoding, deleted object search
-    - added \c LdapSchema class for LDAP schema introspection (objectClasses, attributeTypes)
-    - added \c LdapUrl class for RFC 4516 LDAP URL parsing
-    - added \c whoAmI() convenience method to \c LdapClientHelper
-    - added connection pool health checks, automatic reconnection, and \c withConnectionRetry() with
-      configurable retry policy
-    - added 14 LDAP control OID constants and 5 extended operation OID constants
-
-    <b>Bug Fixes:</b>
-    - <b>critical fix</b>: fixed \c copy() constructor not re-binding to the LDAP server because the
-      bind parameters hash was never saved after a successful bind
-    - updated copyright to 2026
-
-    @subsection openldap_rel13 openldap Module 1.3
-    - added support for interruptible I/O for graceful termination of sandboxed programs; interrupt
-      checks are performed before all LDAP operations (connect, bind, search, add, modify, delete,
-      compare, rename, passwd)
-      (<a href="https://github.com/qoretechnologies/qore/issues/5116">issue 5116</a>)
-    - <b>critical fix</b>: fixed null-termination bug in QoreLDAPMod that caused segfaults
-      when adding or modifying entries with multi-valued attributes (lists)
-    - fixed unreachable code in del() method
-    - fixed return type issues in compare() and isSecure() methods
-    - added NULL check for ldap_get_dn() result in search
-    - updated copyright years
-    - updated README with correct build requirements
-    - added comprehensive automated test suite with 35+ test cases
-    - added LdapConnectionPool module for thread-safe connection pooling
-    - added LdapHelper module with LdapEntry, LdapSearchIterator, LdapDn, and LdapClientHelper classes
-    - added ping/health check functionality via LdapClientHelper
-    - updated GitLab CI to use k8s runner
-
-    @subsection openldap_rel123 openldap Module 1.2.3
-    - fixed compiling with \c qpp from %Qore 1.12.4+
-
-    @subsection openldap_rel122 openldap Module 1.2.2
-    - fixed compiling on Fedora 36+ and systems where libldap_r is deprecated
-      (<a href="https://github.com/qorelanguage/qore/issues/4490">issue 4490</a>)
-
-    @subsection openldap_rel121 openldap Module 1.2.1
-    - fixed memory leaks in freeing extension strings
-      (<a href="https://github.com/qorelanguage/qore/issues/4418">issue 4418</a>)
-
-    @subsection openldap_rel12 openldap Module 1.2
-    - updated build to use the latest %Qore APIs
-
-    @subsection openldap_rel111 openldap Module 1.1.1
-    - fixed a bug where incorrect class destructor is called in openldap module
-      (<a href="https://github.com/qorelanguage/qore/issues/1174">issue 1174</a>)
-
-    @subsection openldap_rel11 openldap Module 1.1
-    - disable openssl cleanup in the Qore library since the openldap module makes openssl cleanup calls and calling those routines twice can result in segfaults
-    - updated example/test scripts to use %%strict-args
-
-    @subsection openldap_rel10 openldap Module 1.0
-    - Initial release of the module.
+    The underlying %LDAP functionality is provided by the
+    <a href="http://www.openldap.org">OpenLDAP library</a>.
+
+    @section openldap_navigation Documentation
+
+    - @subpage openldapgettingstarted — prerequisites and a minimal
+      connect-and-search walkthrough
+    - @subpage openldapcookbook — complete typed examples for every LDAP
+      operation
+    - @subpage openldapsaslguide — SASL mechanisms, hardening options, and a
+      full @c saslBind() option reference
+    - @subpage openldaphelpermodules — the \c LdapConnectionPool,
+      \c LdapHelper, \c LdapAsync, \c LdifHelper, and \c LdapActiveDirectory
+      user modules
+    - @subpage openldapreleasenotes — version history
+
+    @section openldap_user_modules User Modules
+
+    - @ref openldaphelpermodulespool "LdapConnectionPool" — thread-safe
+      connection pool with health checks and retry
+    - @ref openldaphelpermodulesclasses "LdapHelper" —
+      @c LdapEntry / @c LdapSearchIterator / @c LdapDn / @c LdapClientHelper /
+      @c LdapUrl / @c LdapSchema
+    - @ref openldaphelpermodulesasync "LdapAsync" — non-blocking parallel
+      operations via Future/Promise
+    - @ref openldaphelpermodulesldif "LdifHelper" — RFC 2849 LDIF read/write
+    - @ref openldaphelpermodulesad "LdapActiveDirectory" — AD-specific
+      helpers (paged search, range retrieval, GUID/SID decoding)
+
+    @section openldap_installation Installation Notes
+
+    If you intend to use the <i>oracle</i> module along with <i>openldap</i>
+    on Linux, you will probably encounter
+    <a href="https://github.com/qorelanguage/qore/issues/1043">issue 1043</a>.
+    There is currently no generic solution, but a @c LD_PRELOAD work-around
+    is available.
+
+    @section openldap_quicklinks Quick Links
+
+    - @ref OpenLdap::LdapClient "LdapClient class reference"
+    - @ref openldapcookbook "Cookbook"
+    - @ref openldapsaslguide "SASL guide"
+    - @ref ldap_control_constants
+    - @ref ldap_extop_constants
+    - @ref ldap_sasl_constants
 */
