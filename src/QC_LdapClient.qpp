@@ -178,6 +178,19 @@ const LDAP_MOD_DELETE = "delete";
 const LDAP_MOD_REPLACE = "replace";
 ///@}
 
+// OpenLDAP < 2.6 does not define these; fall back to sentinel values so the
+// constants are always exported. Attempting to pass them to saslBind() on an
+// unsupported library yields an LDAP-SASL-BIND-ERROR at runtime.
+#ifndef LDAP_OPT_X_SASL_CBINDING_NONE
+#define LDAP_OPT_X_SASL_CBINDING_NONE -1
+#endif
+#ifndef LDAP_OPT_X_SASL_CBINDING_TLS_UNIQUE
+#define LDAP_OPT_X_SASL_CBINDING_TLS_UNIQUE -1
+#endif
+#ifndef LDAP_OPT_X_SASL_CBINDING_TLS_ENDPOINT
+#define LDAP_OPT_X_SASL_CBINDING_TLS_ENDPOINT -1
+#endif
+
 /** @defgroup ldap_sasl_constants LDAP SASL Constants
  */
 ///@{

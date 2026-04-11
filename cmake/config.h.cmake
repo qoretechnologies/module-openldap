@@ -3,4 +3,6 @@
 
 #cmakedefine HAVE_GCC_VISIBILITY
 
+#cmakedefine HAVE_LDAP_SASL_CBINDING
+
 #endif

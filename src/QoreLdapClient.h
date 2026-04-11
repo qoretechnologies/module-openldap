@@ -769,7 +769,12 @@ protected:
         if (v.isNullOrNothing()) {
             return false;
         }
-
+#ifndef HAVE_LDAP_SASL_CBINDING
+        xsink->raiseException("LDAP-SASL-BIND-ERROR",
+            "SASL channel binding is not supported by the linked OpenLDAP library; "
+            "OpenLDAP 2.6 or later is required");
+        return false;
+#else
         if (v.getType() == NT_INT) {
             int64 i = v.getAsBigInt();
             if (i < 0 || i > INT_MAX) {
@@ -804,6 +809,7 @@ protected:
             return false;
         }
         return true;
+#endif
     }
 
     DLLLOCAL int setLdapIntOption(const char* meth, const char* name, int option, int value,
@@ -1230,10 +1236,17 @@ public:
                 LDAP_OPT_X_SASL_NOCANON, nocanon, xsink)) {
             return -1;
         }
+#ifdef HAVE_LDAP_SASL_CBINDING
         if (has_channel_binding && setLdapIntOption("saslBind", "LDAP_OPT_X_SASL_CBINDING",
                 LDAP_OPT_X_SASL_CBINDING, channel_binding, xsink)) {
             return -1;
         }
+#else
+        // parseSaslChannelBinding() already rejects "channel-binding" at parse time
+        // when the library lacks support, so has_channel_binding is always false here
+        (void)has_channel_binding;
+        (void)channel_binding;
+#endif
 
         // set timeout on connection before calling the synchronous SASL bind
         if (my_timeout_ms) {

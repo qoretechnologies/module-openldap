@@ -27,14 +27,29 @@ endif()
 
 find_package(OpenLDAP REQUIRED)
 
-# Find Cyrus SASL (optional, for SASL authentication support)
+# Cyrus SASL is required: openldap-module.h unconditionally #includes <sasl/sasl.h>
+# and the module uses SASL_SEC_* macros from it
 find_path(SASL2_INCLUDE_DIR sasl/sasl.h)
 find_library(SASL2_LIBRARY NAMES sasl2)
-if(SASL2_INCLUDE_DIR AND SASL2_LIBRARY)
-    message(STATUS "Found Cyrus SASL: ${SASL2_LIBRARY}")
-    set(HAVE_SASL2 TRUE)
+if(NOT SASL2_INCLUDE_DIR)
+    message(FATAL_ERROR "Cyrus SASL development headers (sasl/sasl.h) are required but not found")
+endif()
+message(STATUS "Found Cyrus SASL header: ${SASL2_INCLUDE_DIR}")
+if(SASL2_LIBRARY)
+    message(STATUS "Found Cyrus SASL library: ${SASL2_LIBRARY}")
+endif()
+
+# Probe for OpenLDAP SASL channel binding support (added in OpenLDAP 2.6)
+include(CheckSymbolExists)
+set(_saved_cmake_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+list(APPEND CMAKE_REQUIRED_INCLUDES ${OpenLDAP_INCLUDE_DIR} ${SASL2_INCLUDE_DIR})
+check_symbol_exists(LDAP_OPT_X_SASL_CBINDING "ldap.h" HAVE_LDAP_SASL_CBINDING)
+set(CMAKE_REQUIRED_INCLUDES "${_saved_cmake_required_includes}")
+unset(_saved_cmake_required_includes)
+if(HAVE_LDAP_SASL_CBINDING)
+    message(STATUS "OpenLDAP SASL channel binding: supported")
 else()
-    message(STATUS "Cyrus SASL not found - SASL bind support requires sasl/sasl.h header")
+    message(STATUS "OpenLDAP SASL channel binding: not supported (requires OpenLDAP 2.6+)")
 endif()
 
 if (DEFINED ENV{OpenLDAP_LIB_R})
@@ -66,10 +81,11 @@ set(QORE_DOX_TMPL_SRC
 qore_wrap_qpp_value(QPP_CPP_SRC METALIST QPP_META_SRC ${QPP_SRC})
 
 add_library(${module_name} MODULE ${QPP_CPP_SRC} ${CPP_SRC})
-target_include_directories(${module_name} PUBLIC ${OpenLDAP_INCLUDE_DIR} ${CMAKE_SOURCE_DIR}/src)
-if(HAVE_SASL2)
-    target_include_directories(${module_name} PUBLIC ${SASL2_INCLUDE_DIR})
-endif()
+target_include_directories(${module_name} PUBLIC
+    ${OpenLDAP_INCLUDE_DIR}
+    ${SASL2_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src
+)
 
 if (DEFINED ENV{DOXYGEN_EXECUTABLE})
     set(DOXYGEN_EXECUTABLE $ENV{DOXYGEN_EXECUTABLE})
