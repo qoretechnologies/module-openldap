@@ -468,6 +468,7 @@ public:
             QoreValue val_node = ch->getKeyValue("value");
             struct berval bv = {0, 0};
             struct berval* bvp = nullptr;
+            std::string value_storage;
             if (!val_node.isNullOrNothing()) {
                 if (val_node.getType() == NT_BINARY) {
                     const BinaryNode* bn = val_node.get<const BinaryNode>();
@@ -475,9 +476,10 @@ public:
                     bv.bv_len = bn->size();
                     bvp = &bv;
                 } else if (val_node.getType() == NT_STRING) {
-                    const QoreStringNode* sn = val_node.get<const QoreStringNode>();
-                    bv.bv_val = (char*)sn->c_str();
-                    bv.bv_len = sn->size();
+                    QoreStringValueHelper sn(val_node);
+                    value_storage.assign(sn->c_str(), sn->size());
+                    bv.bv_val = const_cast<char*>(value_storage.data());
+                    bv.bv_len = value_storage.size();
                     bvp = &bv;
                 } else {
                     xsink->raiseException("LDAP-CONTROL-ERROR",
