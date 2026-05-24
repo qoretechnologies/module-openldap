@@ -73,6 +73,7 @@ public class OpenLdapTest inherits QUnit::Test {
         addTestCase("LdapClient::getInfo() test", \testGetInfo());
         addTestCase("LdapClient constructor test", \testConstructor());
         addTestCase("LdapClient constructor negative tests", \testConstructorNegative());
+        addTestCase("LdapClient named argument calls", \testNamedArguments());
         addTestCase("LdapClient::getUri() test", \testGetUri());
         addTestCase("LdapClient::isSecure() test", \testIsSecure());
         addTestCase("LdapClient::bind() test", \testBind());
@@ -284,6 +285,37 @@ public class OpenLdapTest inherits QUnit::Test {
         assertThrows("LDAP-ERROR", sub() {
             new LdapClient("ldap://localhost:99999");
         });
+    }
+
+    #! Test LdapClient named argument support
+    testNamedArguments() {
+        assertThrows("LDAP-ERROR", sub() {
+            new LdapClient(uri: "not-a-valid-uri", options: NOTHING);
+        });
+    }
+
+    # Parsed but not executed; keeps fixed-arity named-call signatures covered without
+    # requiring live LDAP server support for every operation.
+    private namedArgumentCompileOnly(LdapClient ldap) {
+        ldap.bind(bind_options: {}, timeout: NOTHING);
+        ldap.saslBind(options: {"mechanism": "PLAIN"}, timeout: NOTHING);
+        ldap.search(search_options: {"base": "dc=example,dc=com", "filter": "(objectClass=*)"},
+            timeout: NOTHING, controls: NOTHING);
+        ldap.add(dn: "uid=qoretest,dc=example,dc=com", attributes: {"objectClass": "inetOrgPerson"},
+            timeout: NOTHING, controls: NOTHING);
+        ldap.modify(dn: "uid=qoretest,dc=example,dc=com",
+            modifications: {"mod": LDAP_MOD_REPLACE, "attr": "description", "value": "named"},
+            timeout: NOTHING, controls: NOTHING);
+        ldap.del(dn: "uid=qoretest,dc=example,dc=com", timeout: NOTHING, controls: NOTHING);
+        ldap.compare(dn: "uid=qoretest,dc=example,dc=com", attribute: "uid", values: "qoretest",
+            timeout: NOTHING, controls: NOTHING);
+        ldap.rename(dn: "uid=qoretest,dc=example,dc=com", new_rdn: "uid=qoretest2",
+            new_parent: "dc=example,dc=com", delete_old_rdn: True, timeout: NOTHING, controls: NOTHING);
+        ldap.passwd(dn: "uid=qoretest,dc=example,dc=com", old_password: "old", new_password: "new",
+            timeout: NOTHING, controls: NOTHING);
+        binary transaction_id = ldap.txnStart(timeout: NOTHING);
+        ldap.txnEnd(transaction_id: transaction_id, commit: False, timeout: NOTHING);
+        ldap.extendedOp(oid: LDAP_EXOP_WHO_AM_I, value: NOTHING, timeout: NOTHING);
     }
 
     #! Test LdapClient::getUri() method
