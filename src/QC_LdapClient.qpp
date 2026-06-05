@@ -267,7 +267,7 @@ my LdapClient $ldap("ldaps://ldap.example.com:389", ("starttls": True, "timeout"
     @throw LDAP-ERROR an error occurred creating the ldap session context
     @throw ENCODING-CONVERSION-ERROR this exception could be thrown if there is an error converting any string's encoding to UTF-8 before sending to the server
  */
-LdapClient::constructor(string uri, *hash options) {
+LdapClient::constructor(string uri, *hash options) [flags=NAMED_ARGS] {
    LdapClientHolder ldap(new QoreLdapClient(uri, options, xsink), xsink);
    if (!*xsink)
       self->setPrivate(CID_LDAPCLIENT, ldap.release());
@@ -307,10 +307,10 @@ LdapClient::copy() {
 $ldap.bind($h);
     @endcode
 
-    @param bind a hash of bind parameters, allowed keys are:
+    @param bind_options a hash of bind parameters, allowed keys are:
     - \c binddn: the dinstinguished name to use to bind to the LDAP server
     - \c password: the password to use for the connection
-    @param timeout_ms: an optional timeout in milliseconds (1/1000 second); if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
+    @param timeout an optional timeout; if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
 
     @note strings are converted to UTF-8 before sending to the server if necessary
 
@@ -319,8 +319,8 @@ $ldap.bind($h);
     @throw LDAP-ERROR an error occurred performing the bind
     @throw ENCODING-CONVERSION-ERROR this exception could be thrown if there is an error converting any string's encoding to UTF-8 before sending to the server
  */
-LdapClient::bind(hash bind, *timeout timeout_ms) {
-   ldap->bind(xsink, *bind, timeout_ms);
+LdapClient::bind(hash bind_options, *timeout timeout) [flags=NAMED_ARGS] {
+   ldap->bind(xsink, *bind_options, timeout);
 }
 
 //! performs a SASL bind to the server with the given mechanism and credentials
@@ -329,7 +329,7 @@ LdapClient::bind(hash bind, *timeout timeout_ms) {
 $ldap.saslBind(("mechanism": "DIGEST-MD5", "authcid": "user", "password": "secret"));
     @endcode
 
-    @param opts a hash of SASL bind parameters with the following keys:
+    @param options a hash of SASL bind parameters with the following keys:
     - \c "mechanism": (required string) the SASL mechanism name (e.g., "GSSAPI", "DIGEST-MD5", "EXTERNAL", "PLAIN", "SCRAM-SHA-256")
     - \c "authcid": (optional string) the authentication identity
     - \c "authzid": (optional string) the authorization identity (for proxy authorization)
@@ -342,7 +342,7 @@ $ldap.saslBind(("mechanism": "DIGEST-MD5", "authcid": "user", "password": "secre
     - \c "external-ssf": (optional integer) external TLS security strength factor
     - \c "nocanon": (optional boolean) disables SASL host canonicalization when True
     - \c "channel-binding": (optional string or integer) SASL channel binding policy; strings can be \c "none", \c "tls-unique", or \c "tls-endpoint"
-    @param timeout_ms: an optional timeout in milliseconds
+    @param timeout an optional timeout
 
     @note This method uses ldap_sasl_interactive_bind_s() which is synchronous. The timeout is set on the connection before the call and restored after.
 
@@ -350,8 +350,8 @@ $ldap.saslBind(("mechanism": "DIGEST-MD5", "authcid": "user", "password": "secre
     @throw LDAP-SASL-BIND-ERROR missing or invalid parameter
     @throw LDAP-ERROR an error occurred performing the SASL bind
  */
-nothing LdapClient::saslBind(hash opts, *timeout timeout_ms) {
-    ldap->saslBind(xsink, *opts, timeout_ms);
+nothing LdapClient::saslBind(hash options, *timeout timeout) [flags=NAMED_ARGS] {
+    ldap->saslBind(xsink, *options, timeout);
 }
 
 //! performs a search on the LDAP server
@@ -360,14 +360,14 @@ nothing LdapClient::saslBind(hash opts, *timeout timeout_ms) {
 my hash $h = $ldap.search(("base": "dc=example,dc=cp,", "filter": "(objectClass=*)", "attributes": "uid");
     @endcode
 
-    @param h a hash of search options with one or more of the following keys:
+    @param search_options a hash of search options with one or more of the following keys:
     - \c "base": the search base distinguished name for the search (ex: \c "dc=example,dc=com")
     - \c "filter": the search filter (ex: \c "(objectClass=*)")
     - \c "attributes": one or more attribute names; if this is present then only the given attributes will be returned
     - \c "scope": an integer giving the search scope; see @ref ldap_scope_constants for allowed values; note that if this key value is not present then @ref LDAP_SCOPE_SUBTREE is used
     - \c "binary-attributes": an optional list of attribute names that should be returned as binary data for this search
     - \c "page-size": an optional integer specifying the page size for paged results (RFC 2696); when set, the search will automatically use paged results to retrieve all entries even if the server imposes a size limit; this is essential for Active Directory where the default limit is 1000 entries
-    @param timeout_ms: an optional timeout in milliseconds (1/1000 second); if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
+    @param timeout an optional timeout; if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
     @param controls an optional list of LDAP server controls to send with the request; each element is a hash with the following keys:
     - \c "oid": (string) the control OID; see @ref ldap_control_constants for common control OIDs
     - \c "value": (optional binary or string) the BER-encoded control value
@@ -382,10 +382,10 @@ my hash $h = $ldap.search(("base": "dc=example,dc=cp,", "filter": "(objectClass=
     @throw LDAP-CONTROL-ERROR invalid control specification
     @throw ENCODING-CONVERSION-ERROR this exception could be thrown if there is an error converting any string's encoding to UTF-8 before sending to the server
  */
-hash LdapClient::search(hash h, *timeout timeout_ms, *softlist controls) {
-    const QoreStringNode* base = check_hash_key<QoreStringNode>(xsink, *h, "base", "LDAP-SEARCH-ERROR");
-    const QoreStringNode* filter = check_hash_key<QoreStringNode>(xsink, *h, "filter", "LDAP-SEARCH-ERROR");
-    QoreValue n = h->getKeyValue("attributes");
+hash LdapClient::search(hash search_options, *timeout timeout, *softlist controls) [flags=NAMED_ARGS] {
+    const QoreStringNode* base = check_hash_key<QoreStringNode>(xsink, *search_options, "base", "LDAP-SEARCH-ERROR");
+    const QoreStringNode* filter = check_hash_key<QoreStringNode>(xsink, *search_options, "filter", "LDAP-SEARCH-ERROR");
+    QoreValue n = search_options->getKeyValue("attributes");
     ReferenceHolder<QoreListNode> attrl(xsink);
     if (n) {
         if (n.getType() == NT_STRING) {
@@ -401,7 +401,7 @@ hash LdapClient::search(hash h, *timeout timeout_ms, *softlist controls) {
 
     // get scope — default to SUBTREE if not specified
     // note: LDAP_SCOPE_BASE == 0, so we check if the key exists
-    n = h->getKeyValue("scope");
+    n = search_options->getKeyValue("scope");
     int scope;
     if (n.isNullOrNothing()) {
         scope = LDAP_SCOPE_SUBTREE;
@@ -412,7 +412,7 @@ hash LdapClient::search(hash h, *timeout timeout_ms, *softlist controls) {
     // get controls from parameter or from search options hash
     const QoreListNode* ctrl_list = controls && !controls->empty() ? controls : nullptr;
     if (!ctrl_list) {
-        QoreValue ctrl_val = h->getKeyValue("controls");
+        QoreValue ctrl_val = search_options->getKeyValue("controls");
         if (!ctrl_val.isNullOrNothing() && ctrl_val.getType() == NT_LIST) {
             ctrl_list = ctrl_val.get<const QoreListNode>();
         }
@@ -420,12 +420,16 @@ hash LdapClient::search(hash h, *timeout timeout_ms, *softlist controls) {
 
     // get per-search binary attributes
     std::unique_ptr<QoreLdapClient::strset_t> search_binary;
-    QoreValue ba = h->getKeyValue("binary-attributes");
+    QoreValue ba = search_options->getKeyValue("binary-attributes");
     if (!ba.isNullOrNothing() && ba.getType() == NT_LIST) {
         search_binary.reset(new QoreLdapClient::strset_t);
         const QoreListNode* bal = ba.get<const QoreListNode>();
         ConstListIterator li(bal);
+        size_t i = 0;
         while (li.next()) {
+            if (!(++i % 100) && qore_check_cancel(xsink, "LdapClient::search")) {
+                return 0;
+            }
             QoreStringValueHelper str(li.getValue(), QCS_UTF8, xsink);
             if (*xsink) {
                 return 0;
@@ -439,13 +443,13 @@ hash LdapClient::search(hash h, *timeout timeout_ms, *softlist controls) {
     }
 
     // check for paged results
-    QoreValue ps = h->getKeyValue("page-size");
+    QoreValue ps = search_options->getKeyValue("page-size");
     int page_size = (int)ps.getAsBigInt();
     if (page_size > 0) {
-        return ldap->searchPaged(xsink, base, scope, filter, *attrl, false, page_size, timeout_ms, ctrl_list, search_binary.get());
+        return ldap->searchPaged(xsink, base, scope, filter, *attrl, false, page_size, timeout, ctrl_list, search_binary.get());
     }
 
-    return ldap->search(xsink, base, scope, filter, *attrl, false, timeout_ms, ctrl_list, search_binary.get());
+    return ldap->search(xsink, base, scope, filter, *attrl, false, timeout, ctrl_list, search_binary.get());
 }
 
 //! add ldap an entry and attributes
@@ -457,8 +461,8 @@ $ldap.add("uid=temp,ou=people,dc=example,dc=com", ("objectclass": "inetorgperson
     @endcode
 
     @param dn the distinguished name of the entry to add
-    @param attrs a hash of new attributes; the keys are attribute names and the values are the attribute values
-    @param timeout_ms: an optional timeout in milliseconds (1/1000 second); if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
+    @param attributes a hash of new attributes; the keys are attribute names and the values are the attribute values
+    @param timeout an optional timeout; if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
     @param controls an optional list of LDAP server controls; see LdapClient::search() for the control hash format
 
     @note strings are converted to UTF-8 before sending to the server if necessary
@@ -469,8 +473,8 @@ $ldap.add("uid=temp,ou=people,dc=example,dc=com", ("objectclass": "inetorgperson
     @throw LDAP-CONTROL-ERROR invalid control specification
     @throw ENCODING-CONVERSION-ERROR this exception could be thrown if there is an error converting any string's encoding to UTF-8 before sending to the server
 */
-nothing LdapClient::add(string dn, hash attrs, *timeout timeout_ms, *softlist controls) {
-   ldap->add(xsink, dn, attrs, timeout_ms, controls && !controls->empty() ? controls : nullptr);
+nothing LdapClient::add(string dn, hash attributes, *timeout timeout, *softlist controls) [flags=NAMED_ARGS] {
+   ldap->add(xsink, dn, attributes, timeout, controls && !controls->empty() ? controls : nullptr);
 }
 
 //! modify (add, replace, delete) ldap attributes; if any errors occur (entry does not exist, etc), an \c LDAP-ERROR exception will be thrown
@@ -480,11 +484,11 @@ $ldap.modify("uid=temp,ou=people,dc=example,dc=com", ("mod": LDAP_MOD_ADD, "attr
     @endcode
 
     @param dn the distinguished name of the entry to modify
-    @param mods a hash or list of hashes of modifications to make; each hash is made up of the following keys:
+    @param modifications a hash or list of hashes of modifications to make; each hash is made up of the following keys:
     - \c mod: a modification action; see @ref ldap_modify_constants for possible values
     - \c attr: the attribute to modify
     - [\c value]: the value to add or replace
-    @param timeout_ms: an optional timeout in milliseconds (1/1000 second); if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
+    @param timeout an optional timeout; if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
     @param controls an optional list of LDAP server controls; see LdapClient::search() for the control hash format
 
     @note strings are converted to UTF-8 before sending to the server if necessary
@@ -495,8 +499,8 @@ $ldap.modify("uid=temp,ou=people,dc=example,dc=com", ("mod": LDAP_MOD_ADD, "attr
     @throw LDAP-CONTROL-ERROR invalid control specification
     @throw ENCODING-CONVERSION-ERROR this exception could be thrown if there is an error converting any string's encoding to UTF-8 before sending to the server
 */
-nothing LdapClient::modify(string dn, softlist mods, *timeout timeout_ms, *softlist controls) {
-   ldap->modify(xsink, dn, mods, timeout_ms, controls && !controls->empty() ? controls : nullptr);
+nothing LdapClient::modify(string dn, softlist modifications, *timeout timeout, *softlist controls) [flags=NAMED_ARGS] {
+   ldap->modify(xsink, dn, modifications, timeout, controls && !controls->empty() ? controls : nullptr);
 }
 
 //! delete ldap entries; if any errors occur (entry does not exist, etc), an \c LDAP-ERROR exception will be thrown
@@ -506,7 +510,7 @@ $ldap.del("uid=temp,ou=people,dc=example,dc=com");
     @endcode
 
     @param dn the distinguished name of the entry to delete
-    @param timeout_ms: an optional timeout in milliseconds (1/1000 second); if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
+    @param timeout an optional timeout; if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
     @param controls an optional list of LDAP server controls; see LdapClient::search() for the control hash format
 
     @note strings are converted to UTF-8 before sending to the server if necessary
@@ -516,8 +520,8 @@ $ldap.del("uid=temp,ou=people,dc=example,dc=com");
     @throw LDAP-CONTROL-ERROR invalid control specification
     @throw ENCODING-CONVERSION-ERROR this exception could be thrown if there is an error converting any string's encoding to UTF-8 before sending to the server
  */
-nothing LdapClient::del(string dn, *timeout timeout_ms, *softlist controls) {
-   ldap->del(xsink, dn, timeout_ms, controls && !controls->empty() ? controls : nullptr);
+nothing LdapClient::del(string dn, *timeout timeout, *softlist controls) [flags=NAMED_ARGS] {
+   ldap->del(xsink, dn, timeout, controls && !controls->empty() ? controls : nullptr);
 }
 
 //! check ldap attribute values; if any errors occur (entry does not exist, etc), an \c LDAP-ERROR exception will be thrown
@@ -527,9 +531,9 @@ my bool $b = $ldap.compare("uid=temp,ou=people,dc=example,dc=com", "uidnumber", 
     @endcode
 
     @param dn the distinguished name of the entry to find for the attribute value comparison
-    @param attr the name of the attribute for the value comparison
-    @param vals a single string or a list of strings of values to compare; if any value is not a string it will be converted to a string
-    @param timeout_ms: an optional timeout in milliseconds (1/1000 second); if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
+    @param attribute the name of the attribute for the value comparison
+    @param values a single string or a list of strings of values to compare; if any value is not a string it will be converted to a string
+    @param timeout an optional timeout; if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
     @param controls an optional list of LDAP server controls; see LdapClient::search() for the control hash format
 
     @return \c True if the value(s) match, \c False if not
@@ -541,8 +545,8 @@ my bool $b = $ldap.compare("uid=temp,ou=people,dc=example,dc=com", "uidnumber", 
     @throw LDAP-CONTROL-ERROR invalid control specification
     @throw ENCODING-CONVERSION-ERROR this exception could be thrown if there is an error converting any string's encoding to UTF-8 before sending to the server
  */
-bool LdapClient::compare(string dn, string attr, softlist vals, *timeout timeout_ms, *softlist controls) {
-   return ldap->compare(xsink, dn, attr, vals, timeout_ms, controls && !controls->empty() ? controls : nullptr);
+bool LdapClient::compare(string dn, string attribute, softlist values, *timeout timeout, *softlist controls) [flags=NAMED_ARGS] {
+   return ldap->compare(xsink, dn, attribute, values, timeout, controls && !controls->empty() ? controls : nullptr);
 }
 
 //! renames entries in the Directory Information Tree
@@ -552,10 +556,10 @@ $ldap.rename("uid=test,ou=people,dc=example,dc=com", "uid=test1", "ou=people,dc=
     @endcode
 
     @param dn the distinguished name of the entry to rename
-    @param newrdn the new relative distinguished name of the entry
-    @param newparent the distinguished name of the entry's new parent
-    @param deleteoldrdn if this argument is \c False, then the old relative distinguished name will be maintained along with the new name, if \c True (the default), then the old attributes are deleted
-    @param timeout_ms: an optional timeout in milliseconds (1/1000 second); if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
+    @param new_rdn the new relative distinguished name of the entry
+    @param new_parent the distinguished name of the entry's new parent
+    @param delete_old_rdn if this argument is \c False, then the old relative distinguished name will be maintained along with the new name, if \c True (the default), then the old attributes are deleted
+    @param timeout an optional timeout; if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
     @param controls an optional list of LDAP server controls; see LdapClient::search() for the control hash format
 
     @note strings are converted to UTF-8 before sending to the server if necessary
@@ -565,8 +569,9 @@ $ldap.rename("uid=test,ou=people,dc=example,dc=com", "uid=test1", "ou=people,dc=
     @throw LDAP-CONTROL-ERROR invalid control specification
     @throw ENCODING-CONVERSION-ERROR this exception could be thrown if there is an error converting any string's encoding to UTF-8 before sending to the server
 */
-nothing LdapClient::rename(string dn, string newrdn, string newparent, softbool deleteoldrdn = True, *timeout timeout_ms, *softlist controls) {
-   ldap->rename(xsink, dn, newrdn, newparent, deleteoldrdn, timeout_ms, controls && !controls->empty() ? controls : nullptr);
+nothing LdapClient::rename(string dn, string new_rdn, string new_parent, softbool delete_old_rdn = True,
+        *timeout timeout, *softlist controls) [flags=NAMED_ARGS] {
+   ldap->rename(xsink, dn, new_rdn, new_parent, delete_old_rdn, timeout, controls && !controls->empty() ? controls : nullptr);
 }
 
 //! changes the LDAP password of a user
@@ -576,9 +581,9 @@ $ldap.passwd("uid=test,ou=people,dc=example,dc=com", "oldpwd", "newpwd");
     @endcode
 
     @param dn the distinguished name of the user whose password to change
-    @param oldpwd the old password
-    @param newpwd the new password
-    @param timeout_ms: an optional timeout in milliseconds (1/1000 second); if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
+    @param old_password the old password
+    @param new_password the new password
+    @param timeout an optional timeout; if no timeout is given or a timeout of 0 is given, the default timeout for the LdapClient object is used instead; note that like all %Qore functions and methods taking timeout values, a relative date/time value can be used to make the units clear (i.e. \c 20s = twenty seconds, etc.); integers are treated as values in milliseconds, relative date/time values have a maximum resolution of 1 millisecond
     @param controls an optional list of LDAP server controls; see LdapClient::search() for the control hash format
 
     @note strings are converted to UTF-8 before sending to the server if necessary
@@ -588,8 +593,9 @@ $ldap.passwd("uid=test,ou=people,dc=example,dc=com", "oldpwd", "newpwd");
     @throw LDAP-CONTROL-ERROR invalid control specification
     @throw ENCODING-CONVERSION-ERROR this exception could be thrown if there is an error converting any string's encoding to UTF-8 before sending to the server
 */
-nothing LdapClient::passwd(string dn, string oldpwd, string newpwd, *timeout timeout_ms, *softlist controls) {
-   ldap->passwd(xsink, dn, oldpwd, newpwd, timeout_ms, controls && !controls->empty() ? controls : nullptr);
+nothing LdapClient::passwd(string dn, string old_password, string new_password, *timeout timeout,
+        *softlist controls) [flags=NAMED_ARGS] {
+   ldap->passwd(xsink, dn, old_password, new_password, timeout, controls && !controls->empty() ? controls : nullptr);
 }
 
 //! starts a new LDAP transaction (RFC 5805)
@@ -600,7 +606,7 @@ binary txnid = ldap.txnStart();
 ldap.txnEnd(txnid);
     @endcode
 
-    @param timeout_ms optional timeout in milliseconds
+    @param timeout optional timeout
 
     @return a binary transaction ID to pass as a control value with subsequent operations
 
@@ -616,8 +622,8 @@ ldap.txnEnd(txnid);
     @see @ref LDAP_CONTROL_TXN_SPEC
     @see txnEnd()
  */
-binary LdapClient::txnStart(*timeout timeout_ms) {
-    return ldap->txnStart(xsink, timeout_ms);
+binary LdapClient::txnStart(*timeout timeout) [flags=NAMED_ARGS] {
+    return ldap->txnStart(xsink, timeout);
 }
 
 //! ends (commits or aborts) an LDAP transaction (RFC 5805)
@@ -628,9 +634,9 @@ ldap.add(dn, attrs, NOTHING, ({"oid": LDAP_CONTROL_TXN_SPEC, "value": txnid, "cr
 ldap.txnEnd(txnid, True);  # commit
     @endcode
 
-    @param txnid the transaction ID returned by txnStart()
+    @param transaction_id the transaction ID returned by txnStart()
     @param commit if True (default), commit the transaction; if False, abort it
-    @param timeout_ms optional timeout in milliseconds
+    @param timeout optional timeout
 
     @throw LDAP-NO-CONTEXT the LDAP session is not connected
     @throw LDAP-TXN-ERROR transaction commit/abort failed; the exception description includes the
@@ -638,8 +644,8 @@ ldap.txnEnd(txnid, True);  # commit
 
     @see txnStart()
  */
-nothing LdapClient::txnEnd(binary txnid, bool commit = True, *timeout timeout_ms) {
-    ldap->txnEnd(xsink, txnid, commit, timeout_ms);
+nothing LdapClient::txnEnd(binary transaction_id, bool commit = True, *timeout timeout) [flags=NAMED_ARGS] {
+    ldap->txnEnd(xsink, transaction_id, commit, timeout);
 }
 
 //! performs a generic LDAP extended operation
@@ -651,7 +657,7 @@ hash<auto> result = ldap.extendedOp(LDAP_EXOP_WHO_AM_I);
 
     @param oid the OID of the extended operation; see @ref ldap_extop_constants for common OIDs
     @param value optional BER-encoded request data as binary
-    @param timeout_ms optional timeout in milliseconds
+    @param timeout optional timeout
 
     @return a hash with the following keys:
     - \c "oid": (optional string) the response OID
@@ -660,8 +666,8 @@ hash<auto> result = ldap.extendedOp(LDAP_EXOP_WHO_AM_I);
     @throw LDAP-NO-CONTEXT the LDAP session is not connected
     @throw LDAP-ERROR an error occurred performing the extended operation
  */
-hash<auto> LdapClient::extendedOp(string oid, *binary value, *timeout timeout_ms) {
-    return ldap->extendedOp(xsink, oid, value && value->size() ? value : nullptr, timeout_ms);
+hash<auto> LdapClient::extendedOp(string oid, *binary value, *timeout timeout) [flags=NAMED_ARGS] {
+    return ldap->extendedOp(xsink, oid, value && value->size() ? value : nullptr, timeout);
 }
 
 //! returns the URI string used to connect to the LDAP server
