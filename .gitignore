@@ -30,3 +30,15 @@ src/*.dox.h
 src/qc_*.cpp
 src/ql_*.cpp
 src/QC_*.cpp
+
+# Debian package build products
+/obj-*/
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/*.substvars
+/debian/*.debhelper
+/debian/qore-openldap-module/
+/debian/qore-openldap-module-doc/
+/debian/tmp/
+**/__pycache__/

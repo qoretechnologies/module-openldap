@@ -1,0 +1,71 @@
+#!/bin/bash
+# Copyright (C) 2026 David Nichols
+# SPDX-License-Identifier: MIT
+set -euo pipefail
+fixture_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../../test/fixtures" && pwd)
+root=$(mktemp -d /tmp/qore-ldap.XXXXXXXX)
+server_pid=
+cleanup() {
+    status=$?
+    trap - EXIT
+    if [ -n "$server_pid" ]; then kill "$server_pid" 2>/dev/null || true; wait "$server_pid" || true; fi
+    if [ "$status" -ne 0 ]; then cat "$root/server.log" >&2; fi
+    rm -rf -- "$root"
+    exit "$status"
+}
+trap cleanup EXIT
+mkdir "$root/db"
+# Ephemeral test identity, generated for this private loopback directory server.
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
+    -addext 'subjectAltName=IP:127.0.0.1,DNS:localhost' \
+    -keyout "$root/tls.key" -out "$root/tls.crt" > "$root/tls.log" 2>&1
+export LDAPTLS_CACERT="$root/tls.crt"
+cat > "$root/slapd.conf" <<EOF
+include /etc/ldap/schema/core.schema
+include /etc/ldap/schema/cosine.schema
+include /etc/ldap/schema/inetorgperson.schema
+include /etc/ldap/schema/nis.schema
+pidfile $root/slapd.pid
+argsfile $root/slapd.args
+modulepath /usr/lib/ldap
+moduleload back_mdb
+sasl-host localhost
+sasl-realm example.com
+sasl-secprops none
+TLSCertificateFile $root/tls.crt
+TLSCertificateKeyFile $root/tls.key
+authz-regexp "uid=([^,]+),cn=example.com,cn=[^,]+,cn=auth" "uid=\$1,ou=people,dc=example,dc=com"
+authz-regexp "uid=([^,]+),cn=[^,]+,cn=auth" "uid=\$1,ou=people,dc=example,dc=com"
+database mdb
+maxsize 1073741824
+suffix "dc=example,dc=com"
+rootdn "cn=admin,dc=example,dc=com"
+rootpw admin
+directory $root/db
+access to attrs=userPassword by self write by anonymous auth by * none
+access to * by dn.exact="cn=admin,dc=example,dc=com" manage by users write by * read
+EOF
+port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+export LDAP_URI="ldap://127.0.0.1:$port"
+slapd -f "$root/slapd.conf" -h "$LDAP_URI" -d 0 > "$root/server.log" 2>&1 &
+server_pid=$!
+for i in {1..100}; do
+    if ldapwhoami -x -H "$LDAP_URI" -D cn=admin,dc=example,dc=com -w admin >/dev/null 2>&1; then break; fi
+    if ! kill -0 "$server_pid" 2>/dev/null; then cat "$root/server.log"; exit 1; fi
+    sleep .05
+done
+ldapadd -x -H "$LDAP_URI" -D cn=admin,dc=example,dc=com -w admin <<'EOF'
+dn: dc=example,dc=com
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: Qore package tests
+dc: example
+EOF
+ldapadd -x -H "$LDAP_URI" -D cn=admin,dc=example,dc=com -w admin -f "$fixture_dir/test-data.ldif"
+ldapwhoami -H "$LDAP_URI" -Y DIGEST-MD5 -U testuser1 -w testpass1
+ldapwhoami -H "$LDAP_URI" -Y CRAM-MD5 -U testuser1 -w testpass1
+export LDAP_BINDDN=cn=admin,dc=example,dc=com LDAP_PASSWORD=admin
+export LDAP_BASEDN=dc=example,dc=com LDAP_PEOPLEDN=ou=people,dc=example,dc=com LDAP_GROUPSDN=ou=groups,dc=example,dc=com
+export LDAP_SASL_URI="$LDAP_URI" LDAP_SASL_USER=testuser1 LDAP_SASL_PASSWORD=testpass1
+"$@"

@@ -103,8 +103,13 @@ qore_external_user_module("qlib/LdapHelper.qm" "")
 qore_external_user_module("qlib/LdapConnectionPool.qm" "")
 qore_external_user_module("qlib/LdapAsync.qm" "")
 qore_external_user_module("qlib/LdifHelper.qm" "")
-qore_external_user_module("qlib/LdapActiveDirectory.qm" "")
+qore_external_user_module("qlib/LdapActiveDirectory.qm" "LdapHelper")
 qore_external_user_module("qlib/LdapCli.qm" "")
+
+if (COMMAND qore_binary_module_two_phase_docs)
+    qore_binary_module_two_phase_docs(openldap
+        "LdapHelper;LdapConnectionPool;LdapAsync;LdifHelper;LdapActiveDirectory;LdapCli")
+endif()
 
 # Install bin scripts
 install(PROGRAMS

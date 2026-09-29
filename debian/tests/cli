@@ -1,0 +1,21 @@
+#!/bin/sh
+# Copyright (C) 2026 David Nichols
+# SPDX-License-Identifier: MIT
+set -eu
+# All fixture data and credentials belong to the disposable test server.
+for tool in qldapsearch qldapadd qldapmodify qldapdelete qldapcompare qldappasswd qldapwhoami; do
+    timeout 30 /usr/bin/qore "$QORE_LDAP_TEST_BIN_DIR/$tool" --help >/dev/null
+done
+out=$(mktemp)
+trap 'rm -f -- "$out"' EXIT HUP INT TERM
+# Verbose searches must preserve real authentication while redacting its password.
+timeout 30 /usr/bin/qore "$QORE_LDAP_TEST_BIN_DIR/qldapsearch" -C -v -H "$LDAP_URI" \
+    -D "$LDAP_BINDDN" -w "$LDAP_PASSWORD" -b "$LDAP_BASEDN" -s base '(objectClass=*)' dc > "$out"
+grep -q '<redacted>' "$out"
+if grep -Eq 'password[^,}]*admin' "$out"; then cat "$out" >&2; exit 1; fi
+grep -q 'example' "$out"
+# StartTLS verifies the freshly generated loopback certificate.
+timeout 30 /usr/bin/qore "$QORE_LDAP_TEST_BIN_DIR/qldapwhoami" -C -Z -H "$LDAP_URI" \
+    -D "$LDAP_BINDDN" -w "$LDAP_PASSWORD" > "$out"
+grep -qi 'cn=admin,dc=example,dc=com' "$out"
+printf '%s\n' 'CLI help, authenticated search, password redaction and verified StartTLS PASS'

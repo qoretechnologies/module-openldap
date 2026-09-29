@@ -432,6 +432,8 @@ struct TimeoutHelper : public timeval {
 // RAII helper to convert a Qore list of LdapControlInfo hashes to an LDAPControl** array
 class LdapControlListHelper {
 protected:
+    using ControlPtr = std::unique_ptr<LDAPControl, decltype(&ldap_control_free)>;
+    std::vector<ControlPtr> owned_ctrls;
     std::vector<LDAPControl*> ctrls;
 
 public:
@@ -444,7 +446,11 @@ public:
         }
 
         ConstListIterator li(l);
+        size_t count = 0;
         while (li.next()) {
+            if (!(count++ % 100) && qore_check_cancel(xsink)) {
+                return;
+            }
             QoreValue v = li.getValue();
             if (v.getType() != NT_HASH) {
                 xsink->raiseException("LDAP-CONTROL-ERROR",
@@ -469,11 +475,14 @@ public:
             struct berval bv = {0, 0};
             struct berval* bvp = nullptr;
             std::string value_storage;
+            char empty_value = 0;
             if (!val_node.isNullOrNothing()) {
                 if (val_node.getType() == NT_BINARY) {
                     const BinaryNode* bn = val_node.get<const BinaryNode>();
-                    bv.bv_val = (char*)bn->getPtr();
                     bv.bv_len = bn->size();
+                    // An empty value is present; a null pointer would omit it on the wire.
+                    bv.bv_val = bv.bv_len
+                        ? const_cast<char*>(static_cast<const char*>(bn->getPtr())) : &empty_value;
                     bvp = &bv;
                 } else if (val_node.getType() == NT_STRING) {
                     QoreStringValueHelper sn(val_node);
@@ -490,20 +499,17 @@ public:
             }
 
             LDAPControl* ctrl = nullptr;
-            int rc = ldap_control_create(oid->c_str(), critical ? 1 : 0, bvp, 0, &ctrl);
+            // The control owns its value: never transfer Qore or temporary string storage.
+            int rc = ldap_control_create(oid->c_str(), critical ? 1 : 0, bvp, 1, &ctrl);
+            ControlPtr owned_ctrl(ctrl, &ldap_control_free);
             if (rc != LDAP_SUCCESS || !ctrl) {
                 xsink->raiseException("LDAP-CONTROL-ERROR",
                     "failed to create LDAP control with OID '%s': %s",
                     oid->c_str(), ldap_err2string(rc));
                 return;
             }
+            owned_ctrls.push_back(std::move(owned_ctrl));
             ctrls.push_back(ctrl);
-        }
-    }
-
-    DLLLOCAL ~LdapControlListHelper() {
-        for (auto* ctrl : ctrls) {
-            ldap_control_free(ctrl);
         }
     }
 
@@ -1916,6 +1922,7 @@ public:
 
         struct berval* txnid = nullptr;
         int rc = ldap_txn_start_s(ldp, nullptr, nullptr, &txnid);
+        std::unique_ptr<berval, decltype(&ber_bvfree)> txnid_holder(txnid, &ber_bvfree);
 
         // restore default timeout
         if (my_timeout_ms) {
@@ -1928,29 +1935,30 @@ public:
             return nullptr;
         }
 
-        if (!txnid || !txnid->bv_val || txnid->bv_len == 0) {
-            xsink->raiseException("LDAP-TXN-ERROR", "ldap_txn_start_s returned empty transaction ID");
-            if (txnid) {
-                ber_bvfree(txnid);
-            }
+        // Transaction IDs are opaque and OpenLDAP deliberately uses a zero-length ID.
+        if (!txnid || (txnid->bv_len && !txnid->bv_val)) {
+            xsink->raiseException("LDAP-TXN-ERROR", "ldap_txn_start_s returned a missing or invalid transaction ID");
             return nullptr;
         }
 
-        BinaryNode* bn = new BinaryNode;
-        bn->append(txnid->bv_val, txnid->bv_len);
-        ber_bvfree(txnid);
-        return bn;
+        ReferenceHolder<BinaryNode> bn(new BinaryNode, xsink);
+        if (txnid->bv_len) {
+            bn->append(txnid->bv_val, txnid->bv_len);
+        }
+        return bn.release();
     }
 
     DLLLOCAL int txnEnd(ExceptionSink* xsink, const BinaryNode* txnid, bool commit, int my_timeout_ms = 0) {
-        if (!txnid || txnid->size() == 0) {
-            xsink->raiseException("LDAP-TXN-ERROR", "invalid or empty transaction ID");
+        if (!txnid) {
+            xsink->raiseException("LDAP-TXN-ERROR", "missing transaction ID");
             return -1;
         }
 
+        char empty_value = 0;
         struct berval bv;
-        bv.bv_val = (char*)txnid->getPtr();
         bv.bv_len = txnid->size();
+        bv.bv_val = bv.bv_len
+            ? const_cast<char*>(static_cast<const char*>(txnid->getPtr())) : &empty_value;
 
         AutoLocker al(m);
         if (checkValidIntern("txnEnd", xsink)) {
@@ -1977,7 +1985,7 @@ public:
 
         if (rc != LDAP_SUCCESS) {
             QoreStringNode* desc = getErrorText("txnEnd", "ldap_txn_end_s", rc);
-            if (retidp) {
+            if (retidp > 0) {
                 desc->sprintf(" (failed operation message ID: %d)", retidp);
             }
             xsink->raiseException("LDAP-TXN-ERROR", desc);

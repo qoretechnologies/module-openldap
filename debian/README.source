@@ -1,0 +1,34 @@
+Qore OpenLDAP module packages
+============================
+
+This is a development snapshot for qore-testing, not a final release.
+The runtime includes the native module, six source/AOT helpers, compiler
+metadata and seven qldap tools with manual pages. Documentation includes
+seven HTML references and local test fixtures. No LDAP server is installed
+or started by the runtime package; SASL mechanism plugins are recommended.
+
+Build with dpkg-buildpackage -us -uc and the matching Qore 3 SDK. Distribution
+OpenLDAP and Cyrus SASL development packages are required. Offline full,
+arch-only, indep-only, nocheck and nodoc profiles are supported; cross builds
+require a separate host SDK and are rejected. AOT trailers are retained.
+The source distribution offers MIT or LGPL licensing; Debian selects MIT.
+The +ds source repack excludes only m4/acx_pthread.m4, an unused legacy
+Autoconf macro with no accompanying license notice. Licensed Autoconf macros
+remain included with their original notices.
+
+Tests create a private, unprivileged loopback slapd with a fresh database,
+synthetic credentials and an ephemeral TLS certificate. The fixture preflights
+DIGEST-MD5/CRAM-MD5 SASL using the disposable directory's test users. These
+mechanisms and permissive fixture access rules exist solely for tests.
+No host LDAP configuration, external service or real account is used.
+Installed runtime and fresh qcc tests exclude checkout module paths.
+CLI checks cover help, real authentication with redacted verbose output and
+verified StartTLS. Transaction commit/abort and control-value ownership are
+covered against the local server; capability detection uses RootDSE rather
+than swallowing client errors. Full GSSAPI/Kerberos, Active Directory and deployment
+policies require separate environments and qualification.
+
+Before general publication, qualify other Debian/Ubuntu releases and
+architectures, freeze the Qore ABI and test relevant upgrades. No previous
+binary module package is available for upgrade testing. Testing PPA publication
+requires a matching published Qore SDK, source signing and upload.

@@ -24,7 +24,8 @@ COPYING.LGPL and COPYING.MIT for more information
 
 BUILDING
 --------
-Requires qore 1.12.4+ and openldap headers and libraries to build and run.
+Requires Qore 2.3+, OpenLDAP headers and libraries, and Cyrus SASL development
+headers to build. Debian packages use the matching Qore 3 SDK.
 
 CMake Build (Recommended)
 ~~~~~~~~~~~~~~~~~~~~~~~~~

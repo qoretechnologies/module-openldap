@@ -2,6 +2,7 @@
 # -*- mode: qore; indent-tabs-mode: nil -*-
 
 %modern
+%prepend-module-path "${SCRIPT_DIR}/../qlib"
 
 %requires openldap
 %requires QUnit
@@ -1823,6 +1824,19 @@ public class OpenLdapTest inherits QUnit::Test {
         assertEq(Type::Hash, result.type());
         assertTrue(result.hasKey(basedn));
 
+        # Unknown noncritical controls are ignored, but their caller-owned values must survive.
+        # Short strings exercise temporary storage; repeated binary values catch double frees.
+        foreach auto value in ("control-value", <010200ff>, "", binary()) {
+            list<hash<auto>> controls = ({"oid": "1.3.6.1.4.1.55555.999", "value": value},);
+            for (int i = 0; i < 3; ++i) {
+                result = ldap.search({
+                    "base": basedn, "filter": "(objectClass=*)", "scope": LDAP_SCOPE_BASE,
+                }, NOTHING, controls);
+                assertTrue(result.hasKey(basedn));
+                assertEq(value, controls[0].value);
+            }
+        }
+
         # add with empty controls
         if (canWrite()) {
             cleanupTestEntry();
@@ -3095,16 +3109,18 @@ public class OpenLdapTest inherits QUnit::Test {
 
     #! Helper: check if server supports transactions
     private bool serverSupportsTransactions() {
-        try {
-            LdapClient ldap = getClient();
-            # try to start a transaction — if unsupported, throws LDAP-ERROR
-            binary txnid = ldap.txnStart(5s);
-            # abort immediately
-            ldap.txnEnd(txnid, False);
-            return True;
-        } catch (hash<ExceptionInfo> ex) {
-            return False;
+        LdapClient ldap = getClient();
+        hash<auto> result = ldap.search({
+            "base": "", "filter": "(objectClass=*)", "scope": LDAP_SCOPE_BASE,
+            "attributes": ("supportedExtension",),
+        });
+        # Capability discovery must not turn a broken transaction implementation into a skip.
+        foreach string oid in (result{""}.supportedExtension) {
+            if (oid == LDAP_EXOP_TXN_START) {
+                return True;
+            }
         }
+        return False;
     }
 
     #! Test transaction OID constants
@@ -3132,7 +3148,7 @@ public class OpenLdapTest inherits QUnit::Test {
 
         # start transaction
         binary txnid = ldap.txnStart();
-        assertTrue(txnid.size() > 0);
+        assertEq(Type::Binary, txnid.type());
 
         list<hash<auto>> ctrls = ({
             "oid": LDAP_CONTROL_TXN_SPEC,
@@ -3261,7 +3277,8 @@ public class OpenLdapTest inherits QUnit::Test {
         {
             LdapTransaction txn(ldap);
             list<hash<auto>> ctrls = txn.getControls();
-            assertTrue(txn.getTxnId().size() > 0);
+            assertEq(Type::Binary, txn.getTxnId().type());
+            assertEq(txn.getTxnId(), ctrls[0].value);
 
             ldap.add(dn1, {
                 "objectClass": ("inetOrgPerson", "posixAccount", "shadowAccount"),
@@ -3287,7 +3304,7 @@ public class OpenLdapTest inherits QUnit::Test {
     testTransactionNegative() {
         LdapClient ldap = getClient();
 
-        # txnEnd with invalid (empty) transaction ID
+        # txnEnd without an active transaction (an empty ID itself is valid)
         assertThrows("LDAP-TXN-ERROR", sub() {
             ldap.txnEnd(binary(), True);
         });

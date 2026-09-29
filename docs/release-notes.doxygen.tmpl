@@ -36,6 +36,9 @@
       OpenLDAP channel binding support
 
     <b>Bug Fixes:</b>
+    - accept valid empty LDAP transaction IDs, including transaction control values
+    - copy LDAP control values to prevent freeing caller-owned binary or temporary string buffers
+    - redact the bind password from \c qldapsearch verbose options output
     - <b>critical fix</b>: fixed \c copy() constructor not re-binding to the LDAP server because the
       bind parameters hash was never saved after a successful bind
     - updated copyright to 2026

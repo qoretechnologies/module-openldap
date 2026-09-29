@@ -1,0 +1,14 @@
+#!/bin/sh
+# Copyright (C) 2026 David Nichols
+# SPDX-License-Identifier: MIT
+set -eu
+timeout 600 /usr/bin/qore --enable-debug \
+    -l "$QORE_LDAP_TEST_MODULE_DIR/openldap-api-$(/usr/bin/qore --latest-module-api).qmod" \
+    -l "$QORE_LDAP_TEST_QMOD_DIR/LdapHelper.qmod" \
+    -l "$QORE_LDAP_TEST_QMOD_DIR/LdapConnectionPool.qmod" \
+    -l "$QORE_LDAP_TEST_QMOD_DIR/LdapAsync.qmod" \
+    -l "$QORE_LDAP_TEST_QMOD_DIR/LdifHelper.qmod" \
+    -l "$QORE_LDAP_TEST_QMOD_DIR/LdapActiveDirectory.qmod" \
+    -l "$QORE_LDAP_TEST_QMOD_DIR/LdapCli.qmod" \
+    test/openldap.qtest -v
+exec debian/tests/cli

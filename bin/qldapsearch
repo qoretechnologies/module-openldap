@@ -57,8 +57,12 @@ sub main() {
     hash lopt = opts{LdapOptionKeys};
 
     if (opts.verbose) {
+        hash<auto> display_opts = lopt;
+        if (exists display_opts.password) {
+            display_opts.password = "<redacted>";
+        }
         printf("%s %s\n", color.dim("uri:"), uri);
-        printf("%s %s\n", color.dim("options:"), color.formatValue(lopt));
+        printf("%s %s\n", color.dim("options:"), color.formatValue(display_opts));
     }
 
     try {

@@ -1,0 +1,38 @@
+.TH QLDAPDELETE 1 "2026-09-29" "Qore OpenLDAP 2.0" "User Commands"
+.SH NAME
+qldapdelete \- delete LDAP entries
+.SH SYNOPSIS
+.B qldapdelete
+.RI [ options ]
+.SH DESCRIPTION
+This command uses Qore's OpenLDAP bindings to delete LDAP entries.
+Use --help for command-specific arguments and examples.
+.SH COMMON OPTIONS
+.TP
+.BR -H , --uri=URI
+LDAP server URI; defaults to ldap://localhost:389.
+.TP
+.BR -D , --binddn=DN
+Distinguished name for simple authentication.
+.TP
+.BR -W , --prompt-bind
+Read the bind password without echoing it.
+.TP
+.BR -w , --passwd=PASSWORD
+Specify a bind password. Prefer the prompt to keep passwords out of process arguments.
+.TP
+.BR -Z , --starttls
+Negotiate TLS before authenticating.
+.TP
+.BR -v , --verbose
+Show operation details. Bind passwords are redacted from search options.
+.TP
+.BR -C , --no-color
+Disable terminal colors.
+.TP
+.BR -h , --help
+Display complete usage information.
+.SH SEE ALSO
+.BR ldapsearch (1),
+.BR qore (1)
+The API reference is supplied by qore-openldap-module-doc.

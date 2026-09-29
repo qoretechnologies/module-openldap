@@ -1,0 +1,12 @@
+qore-openldap-module (2.0~git20260928.1+ds-0qore1~ubuntu26.04) resolute; urgency=medium
+
+  * Package the native binding, six source/AOT helpers, seven command-line
+    tools, compiler metadata, API references, manual pages and debug symbols.
+  * Add offline builds and installed tests with a private LDAP/SASL server.
+  * Fix empty transaction IDs and LDAP control value ownership.
+  * Redact the bind password in qldapsearch verbose output.
+  * Order LdapHelper before its consumer and link helper documentation.
+  * Correct the documented SDK/SASL requirements.
+  * Exclude the unused Autoconf macro with no accompanying license notice.
+
+ -- David Nichols <david@qore.org>  Tue, 29 Sep 2026 03:11:36 -0000

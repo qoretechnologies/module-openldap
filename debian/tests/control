@@ -1,0 +1,7 @@
+Tests: runtime
+Depends: qore-openldap-module, slapd, ldap-utils, libsasl2-modules, python3, openssl
+Restrictions: allow-stderr
+
+Tests: compiler
+Depends: qore-openldap-module, libqore-dev, slapd, ldap-utils, libsasl2-modules, python3, openssl
+Restrictions: allow-stderr

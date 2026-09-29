@@ -608,7 +608,8 @@ ldap.txnEnd(txnid);
 
     @param timeout optional timeout
 
-    @return a binary transaction ID to pass as a control value with subsequent operations
+    @return an opaque binary transaction ID to pass as a control value with subsequent operations;
+    an empty binary is a valid transaction ID
 
     @note The server must support RFC 5805 LDAP Transactions. Check for OID 1.3.6.1.1.21.1 in
     the rootDSE supportedExtension attribute. Use the returned transaction ID with the
@@ -617,7 +618,7 @@ ldap.txnEnd(txnid);
 
     @throw LDAP-NO-CONTEXT the LDAP session is not connected
     @throw LDAP-ERROR the server does not support transactions or an error occurred
-    @throw LDAP-TXN-ERROR the server returned an empty transaction ID
+    @throw LDAP-TXN-ERROR the server returned a missing or invalid transaction ID
 
     @see @ref LDAP_CONTROL_TXN_SPEC
     @see txnEnd()

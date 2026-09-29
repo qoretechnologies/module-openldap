@@ -1,0 +1,15 @@
+usr/bin/qldap*
+usr/lib/*/qore-modules/openldap-api-*.qmod
+usr/lib/*/qore-modules/LdapHelper.qmod
+usr/share/qore-modules/LdapHelper.qm
+usr/lib/*/qore-modules/LdapConnectionPool.qmod
+usr/share/qore-modules/LdapConnectionPool.qm
+usr/lib/*/qore-modules/LdapAsync.qmod
+usr/share/qore-modules/LdapAsync.qm
+usr/lib/*/qore-modules/LdifHelper.qmod
+usr/share/qore-modules/LdifHelper.qm
+usr/lib/*/qore-modules/LdapActiveDirectory.qmod
+usr/share/qore-modules/LdapActiveDirectory.qm
+usr/lib/*/qore-modules/LdapCli.qmod
+usr/share/qore-modules/LdapCli.qm
+usr/share/qore/metadata/openldap/*.meta.json
