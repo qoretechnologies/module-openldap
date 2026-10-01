@@ -47,7 +47,7 @@ access to * by dn.exact="cn=admin,dc=example,dc=com" manage by users write by * 
 EOF
 port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
 export LDAP_URI="ldap://127.0.0.1:$port"
-slapd -f "$root/slapd.conf" -h "$LDAP_URI" -d 0 > "$root/server.log" 2>&1 &
+/usr/sbin/slapd -f "$root/slapd.conf" -h "$LDAP_URI" -d 0 > "$root/server.log" 2>&1 &
 server_pid=$!
 for i in {1..100}; do
     if ldapwhoami -x -H "$LDAP_URI" -D cn=admin,dc=example,dc=com -w admin >/dev/null 2>&1; then break; fi
