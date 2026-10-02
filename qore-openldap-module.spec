@@ -1,147 +1,123 @@
-%define mod_ver 1.3
-%define module_api %(qore --latest-module-api 2>/dev/null)
-%define module_dir %{_libdir}/qore-modules
-%define user_module_dir %{_datadir}/qore-modules
-
-%if 0%{?sles_version}
-
-%define dist .sles%{?sles_version}
-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+# SPDX-License-Identifier: MIT
+# Use the pinned source epoch for RPM headers and installed file timestamps.
+%global source_date_epoch_from_changelog 1
+%global use_source_date_epoch_as_buildtime 1
+%if v"%{rpmversion}" >= v"4.20"
+%global build_mtime_policy clamp_to_source_date_epoch
 %else
-%if 0%{?suse_version}
-
-# get *suse release major version
-%define os_maj %(echo %suse_version|rev|cut -b3-|rev)
-# get *suse release minor version without trailing zeros
-%define os_min %(echo %suse_version|rev|cut -b-2|rev|sed s/0*$//)
-
-%if %suse_version
-%define dist .opensuse%{os_maj}_%{os_min}
+%global clamp_mtime_to_source_date_epoch 1
 %endif
-
-%endif
-%endif
-
-# see if we can determine the distribution type
-%if 0%{!?dist:1}
-%define rh_dist %(if [ -f /etc/redhat-release ];then cat /etc/redhat-release|sed "s/[^0-9.]*//"|cut -f1 -d.;fi)
-%if 0%{?rh_dist}
-%define dist .rhel%{rh_dist}
-%else
-%define dist .unknown
-%endif
-%endif
-
-Summary: OPENLDAP module for Qore
+%bcond_without tests
+%bcond_without docs
 Name: qore-openldap-module
-Version: %{mod_ver}
-Release: 1%{dist}
-License: LGPL-2.1-or-later
-Group: Development/Languages/Other
-URL: http://qore.org
-Source: http://prdownloads.sourceforge.net/qore/%{name}-%{version}.tar.bz2
-#Source0: %{name}-%{version}.tar.bz2
-BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
-Requires: /usr/bin/env
-Requires: qore-module(abi)%{?_isa} = %{module_api}
-BuildRequires: gcc-c++
-BuildRequires: qore-devel >= 1.12.4
-BuildRequires: qore-stdlib >= 1.12.4
-BuildRequires: qore >= 1.12.4
-%if 0%{?suse_version} || 0%{?sles_version}
-BuildRequires: openldap2-devel
-%else
-BuildRequires: openldap-devel
-%endif
-%if 0%{?el7}
-BuildRequires: devtoolset-7-gcc-c++
-%endif
+Version: 2.0
+Release: 2%{?dist}
+Summary: LDAP, SASL and directory tools for Qore
+License: MIT
+URL: https://github.com/qoretechnologies/module-openldap
+Source0: %{name}-%{version}.tar.xz
+%global _find_debuginfo_dwz_opts %{nil}
 BuildRequires: cmake >= 3.5
+BuildRequires: make
+BuildRequires: gcc-c++
+BuildRequires: pkgconfig(ldap) >= 2.6
+BuildRequires: pkgconfig(libsasl2)
+BuildRequires: qore-devel >= 3.0.0~
+BuildRequires: qore-rpm-macros >= 3.0.0~
+BuildRequires: python3
+%if %{with tests}
+BuildRequires: openssl
+%if 0%{?suse_version}
+BuildRequires: openldap2
+BuildRequires: openldap2-client
+BuildRequires: cyrus-sasl-digestmd5(openssl3-private-provider) = 1
+BuildRequires: cyrus-sasl-crammd5
+%else
+BuildRequires: openldap-servers
+BuildRequires: openldap-clients
+BuildRequires: cyrus-sasl-md5
+%endif
+BuildRequires: cyrus-sasl-plain
+%endif
+%if %{with docs}
 BuildRequires: doxygen
+%if 0%{?suse_version}
+BuildRequires: util-linux
+%else
+BuildRequires: util-linux-core
+%endif
+%endif
+%{?qore_enable_aot_post}
 
 %description
-This package contains the openldap module for the Qore Programming Language.
+Native OpenLDAP bindings with six compiled/source helper modules, compiler
+metadata and seven qldap command-line tools. Supports directory operations,
+SASL, transactions, connection pools, asynchronous operations, LDIF and Active
+Directory helpers. Uses system OpenLDAP and Cyrus SASL libraries.
 
-This module exposes functionality from the openldap library as a Qore API.
-
-%if 0%{?suse_version}
-%debug_package
-%endif
-
+%if %{with docs}
 %package doc
-Summary: Documentation and examples for the Qore openldap module
-Group: Development/Languages
-
+Summary: LDAP, SASL and directory tools reference documentation
+BuildArch: noarch
 %description doc
-This package contains the HTML documentation and example programs for the Qore
-openldap module.
-
-%files doc
-%defattr(-,root,root,-)
-%doc docs/openldap test bin
+Seven native and user-module API references for OpenLDAP and helper modules.
+%endif
 
 %prep
-%setup -q
-
+%autosetup
 %build
-%if 0%{?el7}
-# enable devtoolset7
-. /opt/rh/devtoolset-7/enable
+%{?set_build_flags}
+. %{_rpmconfigdir}/qore/module-env.sh
+qore_set_source_prefix_maps "%{qore_debug_source_dir}"
+cmake -S . -B build -G 'Unix Makefiles' \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE=-DNDEBUG \
+  -DCMAKE_INSTALL_PREFIX=%{_prefix} \
+  -DCMAKE_SKIP_RPATH=ON -DCMAKE_IGNORE_PREFIX_PATH=/usr/local \
+  -DQore_DIR=%{_libdir}/cmake/Qore -DQORE_EXECUTABLE=/usr/bin/qore \
+  -DQORE_QPP_EXECUTABLE=/usr/bin/qpp -DQORE_QCC_EXECUTABLE=/usr/bin/qcc \
+  -DQORE_BUILD_AOT_MODULES=ON -DQORE_AOT_LINK_SOURCE_MODULES=OFF \
+  -DQORE_GENERATE_JAVA_BINDINGS=OFF -DQORE_OPENLDAP_STRICT_DOCS=ON \
+  -DQORE_QM_METADATA_ENV:STRING="QORE_MODULE_DIR=$QORE_MODULE_DIR:$PWD/qlib;QORE_MODULE_DIR_ONLY=1;QORE_INCLUDE_DIR=;LD_LIBRARY_PATH=" \
+  -DCMAKE_DISABLE_FIND_PACKAGE_Doxygen=%{!?with_docs:ON}%{?with_docs:OFF}
+cmake --build build -- %{?_smp_mflags}
+%if %{with docs}
+cmake --build build --target docs -- %{?_smp_mflags}
 %endif
-export CXXFLAGS="%{?optflags}"
-cmake -DCMAKE_INSTALL_PREFIX=%{_prefix} -DCMAKE_BUILD_TYPE=RELWITHDEBINFO -DCMAKE_SKIP_RPATH=1 -DCMAKE_SKIP_INSTALL_RPATH=1 -DCMAKE_SKIP_BUILD_RPATH=1 -DCMAKE_PREFIX_PATH=${_prefix}/lib64/cmake/Qore .
-make %{?_smp_mflags}
-make %{?_smp_mflags} docs
-sed -i 's/#!\/usr\/bin\/env qore/#!\/usr\/bin\/qore/' bin/q*
-
 %install
-make DESTDIR=%{buildroot} install %{?_smp_mflags}
-
-%clean
-rm -rf $RPM_BUILD_ROOT
-
+DESTDIR=%{buildroot} cmake --install build
+%qore_install_aot_sources qlib
+install -d %{buildroot}%{_mandir}/man1
+install -m 644 debian/man/*.1 %{buildroot}%{_mandir}/man1/
+sed -i '1s|^#!/usr/bin/env qore$|#!/usr/bin/qore|' %{buildroot}%{_bindir}/qldap*
+find %{buildroot}%{_libdir}/qore-modules -type f -name '*.qmod' -exec chmod 755 {} +
+%if %{with docs}
+install -d %{buildroot}%{_docdir}/%{name}-doc
+cp -a build/docs %{buildroot}%{_docdir}/%{name}-doc/
+hardlink -t -O %{buildroot}%{_docdir}/%{name}-doc
+%endif
+%check
+%if %{with tests}
+. %{_rpmconfigdir}/qore/module-env.sh
+python3 -B -W error debian/tests/test_aot_metadata.py
+python3 -B -W error rpm/test_fixture.py -v
+python3 -B -W error rpm/run-tests.py --build-dir "$PWD/build"
+%endif
 %files
-%defattr(-,root,root,-)
-%{module_dir}
-%{user_module_dir}
-%{_bindir}/qldapadd
-%{_bindir}/qldapdelete
-%{_bindir}/qldapmodify
-%{_bindir}/qldappasswd
-%{_bindir}/qldapsearch
-%doc COPYING.MIT COPYING.LGPL README RELEASE-NOTES AUTHORS
-
+%license COPYING.MIT COPYING.LGPL
+%doc README RELEASE-NOTES
+%{_libdir}/qore-modules/*
+%{_datadir}/qore-modules/*
+%dir %{_datadir}/qore/metadata/openldap
+%{_datadir}/qore/metadata/openldap/*.meta.json
+%{_bindir}/qldap*
+%{_mandir}/man1/qldap*.1*
+%if %{with docs}
+%files doc
+%license COPYING.MIT COPYING.LGPL
+%doc %{_docdir}/%{name}-doc/
+%endif
 %changelog
-* Mon Jan 20 2026 David Nichols <david@qore.org> 1.3
-- updated to version 1.3
-- critical fix: fixed null-termination bug in QoreLDAPMod causing segfaults
-  when adding or modifying entries with multi-valued attributes
-- fixed unreachable code in del() method
-- fixed return type issues in compare() and isSecure() methods
-- added NULL check for ldap_get_dn() result
-- added comprehensive automated test suite with full test coverage
-- added LdapConnectionPool and LdapHelper Qore user modules
-- added qldapadd, qldapdelete, qldapmodify, qldappasswd, qldapsearch CLI tools
-- added passwd() test coverage
-
-* Sat Dec 17 2022 David Nichols <david@qore.org> 1.2.3
-- updated to version 1.2.3
-- updated to use cmake
-
-* Fri Apr 15 2022 David Nichols <david@qore.org> 1.2.2
-- updated to v1.2.2
-
-* Fri Jan 28 2022 David Nichols <david@qore.org> 1.2.1
-- updated to v1.2.1
-
-* Tue May 1 2018 David Nichols <david@qore.org> 1.2
-- updated to v1.2
-
-* Tue May 27 2014 David Nichols <david@qore.org> 1.1
-- updated to v1.1
-
-* Fri Dec 21 2012 David Nichols <david@qore.org> 1.0
-- updated to v1.0 for initial release
-
-* Mon Nov 5 2012 David Nichols <david@qore.org> 0.1
-- initial spec file for openldap module
+* Fri Oct 02 2026 David Nichols <david@qore.org> - 2.0-2
+- Package six compiled/source helpers, compiler metadata and all seven CLI tools.
+- Test private LDAP, SASL, transactions, verified StartTLS and command-line tools.
