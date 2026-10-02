@@ -66,3 +66,9 @@ QUESTIONS
 ---------
 Please direct any questions to:
 david@qore.org
+
+Strict documentation builds
+---------------------------
+Use -DQORE_OPENLDAP_STRICT_DOCS=ON when configuring CMake to reject reference
+warnings. Native documentation reads the generated public API and guides;
+private implementation helpers are not part of the published reference.

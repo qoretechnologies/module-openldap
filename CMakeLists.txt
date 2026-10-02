@@ -20,6 +20,7 @@ include(CheckCXXCompilerFlag)
 
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 find_package(Qore 2.3 REQUIRED)
+option(QORE_OPENLDAP_STRICT_DOCS "Fail OpenLDAP documentation builds on warnings" OFF)
 
 if (APPLE)
     set(CMAKE_FIND_FRAMEWORK NEVER)
@@ -96,6 +97,18 @@ if (DEFINED ENV{DOXYGEN_EXECUTABLE})
     set(DOXYGEN_EXECUTABLE $ENV{DOXYGEN_EXECUTABLE})
 endif()
 
+# Document the generated public API and guides, not private helper definitions
+# in the generated implementation files alongside them.
+set(MODULE_DOX_INPUT)
+foreach(_ldap_dox_template IN LISTS QORE_DOX_TMPL_SRC)
+    get_filename_component(_ldap_dox_name "${_ldap_dox_template}" NAME_WE)
+    list(APPEND MODULE_DOX_INPUT "${CMAKE_BINARY_DIR}/${_ldap_dox_name}.dox")
+endforeach()
+foreach(_ldap_qpp_source IN LISTS QPP_SRC)
+    get_filename_component(_ldap_qpp_name "${_ldap_qpp_source}" NAME_WE)
+    list(APPEND MODULE_DOX_INPUT "${CMAKE_BINARY_DIR}/${_ldap_qpp_name}.dox.h")
+endforeach()
+
 qore_external_binary_module(${module_name} "${PROJECT_VERSION}" ${OpenLDAP_LIB_R})
 
 # Install user modules
@@ -139,4 +152,14 @@ if (DOXYGEN_FOUND)
     qore_wrap_dox(QORE_DOX_SRC ${QORE_DOX_TMPL_SRC})
     add_custom_target(QORE_MOD_DOX_FILES DEPENDS ${QORE_DOX_SRC})
     add_dependencies(docs-module QORE_MOD_DOX_FILES)
+    if (QORE_OPENLDAP_STRICT_DOCS)
+        file(GLOB _ldap_user_doxyfiles "${CMAKE_BINARY_DIR}/doxygen/Doxyfile.*")
+        set(_ldap_doxyfiles "${CMAKE_BINARY_DIR}/Doxyfile" ${_ldap_user_doxyfiles})
+        if (TARGET docs-module-final)
+            list(APPEND _ldap_doxyfiles "${CMAKE_BINARY_DIR}/Doxyfile.final")
+        endif()
+        foreach(_ldap_doxyfile IN LISTS _ldap_doxyfiles)
+            file(APPEND "${_ldap_doxyfile}" "\nWARN_AS_ERROR = FAIL_ON_WARNINGS\n")
+        endforeach()
+    endif()
 endif()
