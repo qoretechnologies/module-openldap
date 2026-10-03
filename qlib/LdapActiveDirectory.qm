@@ -37,7 +37,9 @@ module LdapActiveDirectory {
 
 /** @mainpage LdapActiveDirectory Module
 
-    @section ldapadintro Introduction
+    @section ldapactivedirectoryintro LdapActiveDirectory Module Introduction
+
+    @anchor ldapadintro
 
     This module provides Active Directory-specific functionality including
     automatic paged search, range retrieval for large multi-valued attributes,

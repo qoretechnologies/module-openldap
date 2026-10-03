@@ -76,16 +76,18 @@
 
     @section openldap_user_modules User Modules
 
-    - @ref openldaphelpermodulespool "LdapConnectionPool" — thread-safe
+    - @ref ldapconnectionpoolintro "LdapConnectionPool" — thread-safe
       connection pool with health checks and retry
-    - @ref openldaphelpermodulesclasses "LdapHelper" —
+    - @ref ldaphelperintro "LdapHelper" —
       @c LdapEntry / @c LdapSearchIterator / @c LdapDn / @c LdapClientHelper /
       @c LdapUrl / @c LdapSchema
-    - @ref openldaphelpermodulesasync "LdapAsync" — non-blocking parallel
+    - @ref ldapasyncintro "LdapAsync" — non-blocking parallel
       operations via Future/Promise
-    - @ref openldaphelpermodulesldif "LdifHelper" — RFC 2849 LDIF read/write
-    - @ref openldaphelpermodulesad "LdapActiveDirectory" — AD-specific
+    - @ref ldifhelperintro "LdifHelper" — RFC 2849 LDIF read/write
+    - @ref ldapactivedirectoryintro "LdapActiveDirectory" — AD-specific
       helpers (paged search, range retrieval, GUID/SID decoding)
+
+    - @ref ldapcliintro "LdapCli" — shared utilities for the qldap* command-line tools
 
     @section openldap_installation Installation Notes
 
@@ -103,4 +105,6 @@
     - @ref ldap_control_constants
     - @ref ldap_extop_constants
     - @ref ldap_sasl_constants
+
+
 */
