@@ -1,66 +1,58 @@
+/* Copyright (C) 2026 Qore Technologies, s.r.o. */
+
 /** @page openldapreleasenotes Release Notes
 
     @tableofcontents
 
+    @anchor openldap_rel13
     @section openldap_rel20 openldap Module 2.0
-    - Added optional strict documentation checks and limited native API inputs to public declarations and guides.
 
-    <b>New Features:</b>
-    - added LDAP transaction support (RFC 5805) via @ref OpenLdap::LdapClient::txnStart()
-      "txnStart()" / @ref OpenLdap::LdapClient::txnEnd() "txnEnd()" with RAII \c LdapTransaction class
-    - added server and client controls support on all LDAP operations; see @ref ldap_control_constants
-    - added SASL authentication with any mechanism (GSSAPI, DIGEST-MD5, EXTERNAL, SCRAM, etc.) via
-      @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()"
-    - added SASL hardening controls for GSSAPI and enterprise LDAP deployments: channel binding,
-      security properties, SSF min/max, external SSF, maximum buffer size, and canonicalization control
-      (see @ref openldapsaslguide)
-    - added paged results (RFC 2696) via the \c "page-size" search option; handles Active Directory's
-      1000-entry limit transparently
-    - added generic extended operations via @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()";
-      see @ref ldap_extop_constants for common OIDs
-    - added binary attribute support with built-in known-binary attribute list and opt-in via
-      \c "binary-attributes" and \c "all-binary" options
-    - added RFC 4514-compliant DN parsing with escaped character support, multi-valued RDNs,
-      and \c escape() / \c unescape() static methods
-    - added \c LdapAsync module with \c LdapFuture and \c LdapAsyncClient for non-blocking parallel
-      LDAP operations using the %Qore Future/Promise pattern
-    - added \c LdifHelper module with \c LdifReader and \c LdifWriter for LDIF (RFC 2849) import/export
-    - added \c LdapActiveDirectory module with \c ActiveDirectoryClient for AD-specific features:
-      auto-paged search, range retrieval, objectGUID/objectSid decoding, deleted object search
-    - added \c LdapSchema class for LDAP schema introspection (objectClasses, attributeTypes)
-    - added \c LdapUrl class for RFC 4516 LDAP URL parsing
-    - added \c whoAmI() convenience method to \c LdapClientHelper
-    - added connection pool health checks, automatic reconnection, and \c withConnectionRetry() with
-      configurable retry policy
-    - added 14 LDAP control OID constants and 5 extended operation OID constants
-    - promoted Cyrus SASL to a hard build-time requirement and added a configure-time probe for
-      OpenLDAP channel binding support
+    @subsection openldap_rel20_overview Overview
 
-    <b>Bug Fixes:</b>
-    - accept valid empty LDAP transaction IDs, including transaction control values
-    - copy LDAP control values to prevent freeing caller-owned binary or temporary string buffers
-    - redact the bind password from \c qldapsearch verbose options output
-    - <b>critical fix</b>: fixed \c copy() constructor not re-binding to the LDAP server because the
-      bind parameters hash was never saved after a successful bind
-    - updated copyright to 2026
+    Version 2.0 adds transaction support, enterprise authentication, and helper modules for pooling,
+    asynchronous operations, directory administration, and LDIF import/export. It includes all changes
+    previously planned for the unreleased 1.3 version. See @ref openldaphelpermodules for examples.
 
-    @section openldap_rel13 openldap Module 1.3
-    - added support for interruptible I/O for graceful termination of sandboxed programs; interrupt
-      checks are performed before all LDAP operations (connect, bind, search, add, modify, delete,
-      compare, rename, passwd)
+    @subsection openldap_rel20_features New Features
+
+    - LDAP transactions (RFC 5805) through @ref OpenLdap::LdapClient::txnStart() "LdapClient::txnStart()" and
+      @ref OpenLdap::LdapClient::txnEnd() "LdapClient::txnEnd()", with automatic rollback through @ref LdapTransaction
+    - SASL authentication through @ref OpenLdap::LdapClient::saslBind() "LdapClient::saslBind()", including GSSAPI,
+      DIGEST-MD5, EXTERNAL, and SCRAM; channel binding, security properties, security strength limits, and
+      canonicalization controls are described in @ref openldapsaslguide
+    - @ref ldapconnectionpoolintro "LdapConnectionPool" provides thread-safe connection pooling, health checks,
+      reconnection, and configurable retries through @ref LdapConnectionPool::withConnectionRetry()
+    - @ref ldaphelperintro "LdapHelper" provides @ref LdapEntry, @ref LdapSearchIterator, @ref LdapDn, and
+      @ref LdapClientHelper; health checks and identity queries use @ref LdapClientHelper::ping() and
+      @ref LdapClientHelper::whoAmI()
+    - @ref ldapasyncintro "LdapAsync" provides @ref LdapFuture and @ref LdapAsyncClient for parallel LDAP operations
+    - @ref ldifhelperintro "LdifHelper" provides @ref LdifReader and @ref LdifWriter for LDIF (RFC 2849) import/export
+    - @ref ldapactivedirectoryintro "LdapActiveDirectory" provides @ref ActiveDirectoryClient for paged searches,
+      range retrieval, GUID/SID decoding, and searches for deleted objects
+    - Server and client controls on LDAP operations; see @ref ldap_control_constants for control OIDs
+    - Paged searches (RFC 2696) through the \c page-size option of @ref OpenLdap::LdapClient::search() "LdapClient::search()",
+      allowing searches beyond Active Directory's default 1000-entry limit
+    - Binary attributes through the \c binary-attributes and \c all-binary search options, with automatic handling
+      of known binary attributes; see @ref OpenLdap::LdapClient::search() "LdapClient::search()"
+    - Generic extended operations through @ref OpenLdap::LdapClient::extendedOp() "LdapClient::extendedOp()";
+      see @ref ldap_extop_constants for common operation OIDs
+    - RFC 4514 DN parsing with escaped characters and multi-valued RDNs through @ref LdapDn, including
+      @ref LdapDn::escape() and @ref LdapDn::unescape(); @ref LdapUrl parses RFC 4516 LDAP URLs and
+      @ref LdapSchema exposes directory schema information
+    - Interruptible I/O allows sandboxed programs to terminate gracefully before LDAP operations
       (<a href="https://github.com/qoretechnologies/qore/issues/5116">issue 5116</a>)
-    - <b>critical fix</b>: fixed null-termination bug in QoreLDAPMod that caused segfaults
-      when adding or modifying entries with multi-valued attributes (lists)
-    - fixed unreachable code in del() method
-    - fixed return type issues in compare() and isSecure() methods
-    - added NULL check for ldap_get_dn() result in search
-    - updated copyright years
-    - updated README with correct build requirements
-    - added comprehensive automated test suite with 35+ test cases
-    - added LdapConnectionPool module for thread-safe connection pooling
-    - added LdapHelper module with LdapEntry, LdapSearchIterator, LdapDn, and LdapClientHelper classes
-    - added ping/health check functionality via LdapClientHelper
-    - updated GitLab CI to use k8s runner
+
+    @subsection openldap_rel20_fixes Bug Fixes
+
+    - Fixed a crash when passing multi-valued attributes to @ref OpenLdap::LdapClient::add() "LdapClient::add()" or
+      @ref OpenLdap::LdapClient::modify() "LdapClient::modify()"
+    - Fixed @ref OpenLdap::LdapClient::copy() "LdapClient::copy()" failing to authenticate the copied connection
+      because successful bind parameters were not retained
+    - Fixed unreachable code in @ref OpenLdap::LdapClient::del() "LdapClient::del()"
+    - Corrected return types for @ref OpenLdap::LdapClient::compare() "LdapClient::compare()" and
+      @ref OpenLdap::LdapClient::isSecure() "LdapClient::isSecure()"
+    - Prevented a null distinguished name returned by the LDAP library from causing a crash in
+      @ref OpenLdap::LdapClient::search() "LdapClient::search()"
 
     @section openldap_rel123 openldap Module 1.2.3
     - fixed compiling with \c qpp from %Qore 1.12.4+
