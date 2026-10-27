@@ -1,5 +1,6 @@
 #!/usr/bin/env qore
 # -*- mode: qore; indent-tabs-mode: nil -*-
+# Copyright (C) 2026 Qore Technologies, s.r.o.
 
 %modern
 %prepend-module-path "${SCRIPT_DIR}/../qlib"
@@ -24,6 +25,53 @@ public class OpenLdapTest inherits QUnit::Test {
         const DefaultBaseDn = "dc=example,dc=com";
         const DefaultPeopleDn = "ou=people,dc=example,dc=com";
         const DefaultGroupsDn = "ou=groups,dc=example,dc=com";
+
+        #! the execution modes that the NULL attribute search is made in
+        const NullAttributeModes = {"ast": EM_AST, "ir": EM_IR, "jit": EM_JIT, "tiered": EM_TIERED};
+
+        #! searches with NULL attributes; each function returns the exception as "err: desc"
+        const NullAttributeCode = "%modern
+string sub search(LdapClient ldap, hash<auto> opts) {
+    try {
+        ldap.search(opts);
+        return \"no exception\";
+    } catch (hash<ExceptionInfo> ex) {
+        return ex.err + \": \" + ex.desc;
+    }
+}
+string sub literal_null(LdapClient ldap, string base) {
+    try {
+        ldap.search({\"base\": base, \"filter\": \"(objectClass=*)\", \"attributes\": NULL});
+        return \"no exception\";
+    } catch (hash<ExceptionInfo> ex) {
+        return ex.err + \": \" + ex.desc;
+    }
+}
+string sub variable_null(LdapClient ldap, string base) {
+    auto n = NULL;
+    return search(ldap, {\"base\": base, \"filter\": \"(objectClass=*)\", \"attributes\": n});
+}
+class NullSearch {
+    string literalNull(LdapClient ldap, string base) {
+        try {
+            ldap.search({\"base\": base, \"filter\": \"(objectClass=*)\", \"attributes\": NULL});
+            return \"no exception\";
+        } catch (hash<ExceptionInfo> ex) {
+            return ex.err + \": \" + ex.desc;
+        }
+    }
+    string variableNull(LdapClient ldap, string base) {
+        auto n = NULL;
+        return search(ldap, {\"base\": base, \"filter\": \"(objectClass=*)\", \"attributes\": n});
+    }
+}
+string sub method_literal_null(LdapClient ldap, string base) {
+    return (new NullSearch()).literalNull(ldap, base);
+}
+string sub method_variable_null(LdapClient ldap, string base) {
+    return (new NullSearch()).variableNull(ldap, base);
+}
+";
 
         string uri;
         *string binddn;
@@ -82,6 +130,7 @@ public class OpenLdapTest inherits QUnit::Test {
         addTestCase("LdapClient::search() test", \testSearch());
         addTestCase("LdapClient::search() corner cases", \testSearchCornerCases());
         addTestCase("LdapClient::search() negative tests", \testSearchNegative());
+        addTestCase("LdapClient::search() with NULL attributes in each execution mode", \testSearchNullAttributes());
         addTestCase("LdapClient::add() test", \testAdd());
         addTestCase("LdapClient::add() negative tests", \testAddNegative());
         addTestCase("LdapClient::modify() test", \testModify());
@@ -519,6 +568,25 @@ public class OpenLdapTest inherits QUnit::Test {
     }
 
     #! Test LdapClient::search() negative cases
+    #! Tests that an \c attributes key with NULL is refused as in the AST interpreter in every execution mode
+    /** The IR, JIT and AST engines pass a literal NULL to a builtin differently, so the search is made from code
+        parsed in each execution mode: from a function and a method, with NULL in the hash literal and from a
+        variable; the error is raised before the request is sent
+    */
+    testSearchNullAttributes() {
+        LdapClient ldap(uri);
+        string expected = "LDAPCLIENT-SEARCH-ERROR: the 'attributes' key of the search hash contains type 'NULL' "
+            "(expecting 'list' or 'string')";
+        foreach hash<auto> mode in (NullAttributeModes.pairIterator()) {
+            Program pgm();
+            pgm.setExecMode(mode.value);
+            pgm.parse(NullAttributeCode, "null-attributes-" + mode.key);
+            foreach string func in ("literal_null", "variable_null", "method_literal_null", "method_variable_null") {
+                assertEq(expected, pgm.callFunction(func, ldap, basedn), mode.key + " " + func);
+            }
+        }
+    }
+
     testSearchNegative() {
         LdapClient ldap = getClient();
 

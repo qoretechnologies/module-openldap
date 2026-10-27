@@ -129,6 +129,14 @@ export LDAP_BASEDN="dc=example,dc=com"
 export LDAP_PEOPLEDN="ou=people,dc=example,dc=com"
 export LDAP_GROUPSDN="ou=groups,dc=example,dc=com"
 
+# the tests must load the module that this job built and installed, not one that the image already has
+loaded=$(qore -l openldap -e 'printf("%s", get_module_hash().openldap.filename);')
+if ! grep -qxF "${loaded}" ${MODULE_SRC_DIR}/build/install_manifest.txt; then
+    echo "ERROR: the tests would load '${loaded}', which this job did not install" >&2
+    exit 1
+fi
+echo "-- the tests load ${loaded}"
+
 cd ${MODULE_SRC_DIR}/test
 QORE_BIN=$(which qore)
 su -c "${QORE_BIN} openldap.qtest -v" qore
