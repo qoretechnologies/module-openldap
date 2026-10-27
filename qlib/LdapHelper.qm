@@ -149,15 +149,18 @@ public class LdapDn {
         @return True if this DN is a direct or indirect child of parent
     */
     bool isChildOf(string parent) {
+        # an empty DN is not a parent
+        if (parent.empty()) {
+            return False;
+        }
         string parentDn = getParent();
         if (parentDn == parent) {
             return True;
         }
-        # check if parent is a suffix of our DN
-        if (parentDn.size() > parent.size()) {
-            return parentDn.rfind(parent) == (parentDn.size() - parent.size());
-        }
-        return False;
+        # check if parent is made of the last RDNs of our parent DN
+        string suffix = "," + parent;
+        return parentDn.size() > suffix.size()
+            && parentDn.substr(parentDn.size() - suffix.size()) == suffix;
     }
 
     #! Returns the string representation

@@ -1533,7 +1533,12 @@ public class OpenLdapTest inherits QUnit::Test {
         {
             LdapDn dn("uid=test,dc=example,dc=com");
             assertTrue(dn.isChildOf("dc=com"));
-            assertFalse(dn.isChildOf(""));  # empty parent - find returns -1 which is not > 0
+            assertFalse(dn.isChildOf(""));  # an empty DN is not a parent
+            # the parent is made of whole RDNs
+            assertTrue(dn.isChildOf("dc=example,dc=com"));
+            assertFalse(dn.isChildOf("com"));
+            assertFalse(dn.isChildOf("ample,dc=com"));
+            assertFalse(dn.isChildOf("uid=test,dc=example,dc=com"));
         }
     }
 
