@@ -121,7 +121,7 @@ BASE_LDIF
 
 # run the tests
 echo && echo "-- running tests --"
-export QORE_MODULE_DIR=${MODULE_SRC_DIR}/qlib:${QORE_MODULE_DIR}
+export QORE_MODULE_DIR=${MODULE_SRC_DIR}/qlib:${MODULE_SRC_DIR}/build:${QORE_MODULE_DIR}
 export LDAP_URI="ldap://localhost:389"
 export LDAP_BINDDN="cn=admin,dc=example,dc=com"
 export LDAP_PASSWORD="admin"
@@ -129,16 +129,14 @@ export LDAP_BASEDN="dc=example,dc=com"
 export LDAP_PEOPLEDN="ou=people,dc=example,dc=com"
 export LDAP_GROUPSDN="ou=groups,dc=example,dc=com"
 
-# the tests must load the module that this job built and installed, not one that the image already has
-loaded=$(qore -l openldap -e 'printf("%s", get_module_hash().openldap.filename);')
-if ! grep -qxF "${loaded}" ${MODULE_SRC_DIR}/build/install_manifest.txt; then
-    echo "ERROR: the tests would load '${loaded}', which this job did not install" >&2
-    exit 1
-fi
-echo "-- the tests load ${loaded}"
+# the tests must load the modules that this job built, not the copies that the image already has
+${MODULE_SRC_DIR}/test/docker_test/check-loaded-modules.sh ${MODULE_SRC_DIR}/build
 
 cd ${MODULE_SRC_DIR}/test
 QORE_BIN=$(which qore)
 su -c "${QORE_BIN} openldap.qtest -v" qore
+
+# ... and they still do once the tests have run
+${MODULE_SRC_DIR}/test/docker_test/check-loaded-modules.sh ${MODULE_SRC_DIR}/build
 
 echo && echo "-- tests completed successfully --"
