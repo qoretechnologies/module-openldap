@@ -245,7 +245,7 @@ protected:
     DLLLOCAL virtual int addElement(const ConstListIterator& li, ExceptionSink* xsink) {
         QoreValue p = li.getValue();
         if (p.getType() != NT_HASH) {
-            xsink->raiseException("LDAP-MODIFY-ERROR", "element %d/%d (starting from 0) is type '%s'; expecting 'hash'", li.index(), li.max(), p.getTypeName());
+            xsink->raiseException("LDAP-MODIFY-ERROR", "element %zu/%zu (starting from 0) is type '%s'; expecting 'hash'", li.index(), li.max(), p.getTypeName());
             return -1;
         }
         const QoreHashNode* h = p.get<const QoreHashNode>();
@@ -256,7 +256,7 @@ protected:
 
         int mod_op = modmap.get(mod->c_str());
         if (mod_op == -1) {
-            xsink->raiseException("LDAP-MODIFY-ERROR", "element %d/%d (starting with 0) don't know how to process modification action '%s' (expecting one of 'add', 'delete', 'replace')", li.index(), li.max(), mod->c_str());
+            xsink->raiseException("LDAP-MODIFY-ERROR", "element %zu/%zu (starting with 0) don't know how to process modification action '%s' (expecting one of 'add', 'delete', 'replace')", li.index(), li.max(), mod->c_str());
             return -1;
         }
 
