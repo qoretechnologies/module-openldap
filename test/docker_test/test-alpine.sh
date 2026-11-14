@@ -135,6 +135,8 @@ ${MODULE_SRC_DIR}/test/docker_test/check-loaded-modules.sh ${MODULE_SRC_DIR}/bui
 cd ${MODULE_SRC_DIR}/test
 QORE_BIN=$(which qore)
 su -c "${QORE_BIN} openldap.qtest -v" qore
+# no LDAP server is needed: loads the modules in a Program restricted like a Qorus interface
+su -c "${QORE_BIN} RestrictedProgramLoad.qtest -v" qore
 
 # ... and they still do once the tests have run
 ${MODULE_SRC_DIR}/test/docker_test/check-loaded-modules.sh ${MODULE_SRC_DIR}/build

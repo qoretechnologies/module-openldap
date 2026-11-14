@@ -22,6 +22,7 @@
     DEALINGS IN THE SOFTWARE.
 */
 
+%requires qore >= 3.0
 %modern
 
 module LdapAsync {
@@ -30,6 +31,9 @@ module LdapAsync {
     author = "David Nichols <david@qore.org>";
     url = "https://qore.org";
     license = "MIT";
+    # THREAD_CONTROL: the module starts its own background tasks
+    # (a Program restricted like a Qorus interface can load the module only when it declares them; Qore #5803)
+    domains = "THREAD_CONTROL";
 }
 
 %requires openldap
