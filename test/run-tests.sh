@@ -65,6 +65,8 @@ cd "$SCRIPT_DIR"
 export QORE_MODULE_DIR="$REPO_DIR/qlib:$REPO_DIR/build:${QORE_MODULE_DIR:-}"
 qore --enable-debug openldap.qtest -v
 TEST_RESULT=$?
+# loads the modules in a Program restricted like a Qorus interface (needs no LDAP server)
+qore --enable-debug RestrictedProgramLoad.qtest -v || TEST_RESULT=1
 
 # Cleanup Docker container if requested
 if [ $USE_DOCKER -eq 1 ] && [ $CLEANUP -eq 1 ]; then
