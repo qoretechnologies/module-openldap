@@ -32,6 +32,9 @@
 #include <ldap.h>
 #include <sasl/sasl.h>
 
+// the library functions as the module binds them (see ldap-api.h)
+#include "ldap-api.h"
+
 #include <map>
 #include <string>
 
