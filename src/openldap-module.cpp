@@ -64,7 +64,93 @@ const QoreLdapClient::strset_t QoreLdapClient::default_binary_attrs = {
     "logonhours", "replicauptodate", "securityidentifier",
 };
 
+#ifdef QORE_OPENLDAP_ISOLATE
+#include <dlfcn.h>
+
+QoreOpenLdapApi qore_openldap_api;
+
+// the handle of the library, opened in isolation
+static void* ldap_handle = nullptr;
+
+static void close_failed_load();
+
+QoreStringNode* qore_openldap_load() {
+   if (ldap_handle) {
+      return nullptr;
+   }
+   // RTLD_DEEPBIND: the references of libldap (to liblber and to itself) resolve in its own scope before the global
+   // scope, where another module's library (Oracle's libclntsh) can export symbols of the same names (#1043);
+   // RTLD_LOCAL: the library's symbols are not added to the global scope
+   const int flags = RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND;
+   std::string err;
+   for (const char* name : {QORE_OPENLDAP_DLOPEN_NAMES}) {
+      ldap_handle = dlopen(name, flags);
+      if (ldap_handle) {
+         break;
+      }
+      const char* e = dlerror();
+      if (!err.empty()) {
+         err += "; ";
+      }
+      err += e ? e : name;
+   }
+   if (!ldap_handle) {
+      QoreStringNode* str = new QoreStringNode;
+      str->sprintf("cannot load the openldap library: %s", err.c_str());
+      return str;
+   }
+
+   const char* missing = nullptr;
+#define QORE_OPENLDAP_RESOLVE(n) \
+   if (!missing) { \
+      void* sym = dlsym(ldap_handle, #n); \
+      if (sym) { \
+         qore_openldap_api.p_##n = reinterpret_cast<decltype(qore_openldap_api.p_##n)>(sym); \
+      } else { \
+         missing = #n; \
+      } \
+   }
+   QORE_OPENLDAP_FUNCS(QORE_OPENLDAP_RESOLVE)
+#undef QORE_OPENLDAP_RESOLVE
+   if (!missing) {
+      qore_openldap_api.ber_pvt_opt_on_addr = reinterpret_cast<char*>(dlsym(ldap_handle, "ber_pvt_opt_on"));
+      if (!qore_openldap_api.ber_pvt_opt_on_addr) {
+         missing = "ber_pvt_opt_on";
+      }
+   }
+   if (missing) {
+      QoreStringNode* str = new QoreStringNode;
+      str->sprintf("the openldap library does not provide '%s'", missing);
+      close_failed_load();
+      return str;
+   }
+   return nullptr;
+}
+
+// closes the library of a load that failed
+static void close_failed_load() {
+   if (ldap_handle) {
+      dlclose(ldap_handle);
+      ldap_handle = nullptr;
+   }
+   qore_openldap_api = QoreOpenLdapApi();
+}
+
+void qore_openldap_unload() {
+   // the library stays mapped for the life of the process, as it did when it was linked: it keeps global state (its
+   // options, the TLS and SASL contexts) that its dependencies and other threads may still use at exit, and unmapping
+   // it hides that memory from leak checkers
+}
+#endif
+
 static void openldap_module_init(QoreModuleInitContext& ctx, ExceptionSink& xsink) {
+#ifdef QORE_OPENLDAP_ISOLATE
+   if (QoreStringNode* load_err = qore_openldap_load()) {
+      xsink.raiseException("MODULE-INIT-ERROR", load_err);
+      return;
+   }
+#endif
+
    // this also serves to initialize the library in a single-threaded way
    QoreStringNode* err = QoreLdapClient::checkLibrary();
    if (err) {
@@ -84,4 +170,7 @@ static void openldap_module_ns_init(QoreNamespace* rns, QoreNamespace* qns, Exce
 }
 
 static void openldap_module_delete() {
+#ifdef QORE_OPENLDAP_ISOLATE
+   qore_openldap_unload();
+#endif
 }

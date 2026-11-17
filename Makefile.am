@@ -12,6 +12,7 @@ USER_MODULES = qlib/LdapHelper.qm qlib/LdapConnectionPool.qm
 EXTRA_DIST = COPYING.MIT COPYING.LGPL AUTHORS README \
 	RELEASE-NOTES \
 	src/QC_LdapClient.qpp \
+	src/ldap-api.h \
 	src/openldap-module.h \
 	qore-openldap-module.spec \
 	$(USER_MODULES)

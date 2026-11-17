@@ -1,0 +1,98 @@
+#!/usr/bin/env qore
+# -*- mode: qore; indent-tabs-mode: nil -*-
+
+# Copyright (C) 2026 Qore Technologies, s.r.o.
+
+%modern
+
+%requires qore >= 3.0
+%requires QUnit
+%requires FsUtil
+
+%exec-class LibldapIsolationTest
+
+#! The module binds its own libldap, whatever another library exports with the names of libldap's functions (#1043)
+/** Qore loads binary modules with RTLD_GLOBAL, so the symbols of the libraries that a module links are visible to
+    the modules loaded after it.  Oracle's libclntsh exports unversioned ldap_* and ber_* symbols; with the oracle
+    module loaded before this one, ldap_get_option() was the Oracle client's, and the module failed to load with
+    MODULE-INIT-ERROR (error code 89, LDAP_PARAM_ERROR).
+
+    The test does not need the Oracle client: a stub library that exports the same symbols is loaded first with
+    LD_PRELOAD, which places it ahead of libldap in the global scope exactly as the Oracle library is.  The module
+    is loaded, and used (the constructor of the client calls libldap, which calls liblber), in a child process.
+
+    The isolation uses RTLD_DEEPBIND, which only glibc has: the test is skipped elsewhere.
+*/
+class LibldapIsolationTest inherits QUnit::Test {
+    private {
+        string qore_bin;
+
+        #! the symbols of libldap and liblber that a foreign library can export; they fail as the Oracle client's did
+        const StubSource = "#include <stddef.h>
+int ldap_get_option(void* ld, int option, void* outvalue) { return 89; }
+int ldap_set_option(void* ld, int option, const void* invalue) { return 89; }
+int ldap_initialize(void** ldp, const char* uri) { return -1; }
+void ber_free(void* ber, int freebuf) { }
+void ber_memfree(void* p) { }
+void ldap_memfree(void* p) { }
+";
+
+        #! the child script: loads the module and calls the library through the client's constructor
+        const ChildScript = "%new-style
+%requires openldap
+try {
+    new Qore::OpenLdap::LdapClient(\"ldap://127.0.0.1:1\");
+    printf(\"connected\\n\");
+} catch (hash<ExceptionInfo> ex) {
+    printf(\"%s: %s\\n\", ex.err, ex.desc);
+}
+";
+    }
+
+    constructor() : QUnit::Test("LibldapIsolationTest", "1.0", \ARGV) {
+        qore_bin = ENV.QORE_BIN ?? ENV.QORE_BINARY ?? QORE_ARGV[0] ?? "qore";
+        addTestCase("a library with libldap's symbol names loaded first does not capture the module's calls",
+            \testForeignSymbols());
+        set_return_value(main());
+    }
+
+    #! returns True if the platform's loader has RTLD_DEEPBIND (glibc)
+    private bool hasDeepBind() {
+        if (PlatformOS != "Linux") {
+            return False;
+        }
+        string out = backquote("ldd --version 2>&1");
+        return out !~ /musl/i && out =~ /GNU libc|GLIBC/i;
+    }
+
+    testForeignSymbols() {
+        if (!hasDeepBind()) {
+            testSkip("the platform has no RTLD_DEEPBIND");
+        }
+        TmpDir tmp("qore-openldap-isolation-");
+        string src = tmp.path + DirSep + "stub.c";
+        string lib = tmp.path + DirSep + "stub.so";
+        string script = tmp.path + DirSep + "child.q";
+        File f();
+        f.open2(src, O_CREAT | O_WRONLY | O_TRUNC);
+        f.write(StubSource);
+        f.close();
+        string cc = ENV.CC ?? "cc";
+        string out = backquote(sprintf("%s -shared -fPIC -o %s %s 2>&1", cc, lib, src));
+        if (!is_file(lib)) {
+            testSkip("cannot compile the stub library: " + out);
+        }
+        f.open2(script, O_CREAT | O_WRONLY | O_TRUNC);
+        f.write(ChildScript);
+        f.close();
+
+        # control: without the stub the module loads and the library reports that nothing listens on the port
+        string expected = trim(backquote(sprintf("%s -b %s 2>&1", qore_bin, script)));
+        assertRegex("^LDAP-ERROR: ", expected, "the client reaches the library without the stub");
+
+        # the stub's symbols come first in the global scope
+        string actual = trim(backquote(sprintf("LD_PRELOAD=%s %s -b %s 2>&1", lib, qore_bin, script)));
+        assertEq(expected, actual, "the module's and the library's calls are not captured by the foreign symbols");
+        assertTrue(actual !~ /MODULE-INIT-ERROR/, actual);
+    }
+}

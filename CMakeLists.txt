@@ -58,6 +58,45 @@ if (DEFINED ENV{OpenLDAP_LIB_R})
 endif()
 message(STATUS "found lib ${OpenLDAP_LIB_R}")
 
+# Bind libldap in isolation where the platform has RTLD_DEEPBIND (glibc): another module's library, loaded by the
+# global scope that Qore loads modules into, can export symbols with the names of libldap's and win over them (Oracle's
+# libclntsh exports ldap_* and ber_*; #1043).  See src/ldap-api.h.
+option(QORE_OPENLDAP_ISOLATE "Open libldap with RTLD_DEEPBIND instead of linking it (where available)" ON)
+set(QORE_OPENLDAP_LINK_LIBS ${OpenLDAP_LIB_R})
+if (QORE_OPENLDAP_ISOLATE)
+    include(CheckCXXSourceCompiles)
+    set(_saved_cmake_required_definitions "${CMAKE_REQUIRED_DEFINITIONS}")
+    set(_saved_cmake_required_libraries "${CMAKE_REQUIRED_LIBRARIES}")
+    set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
+    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
+    check_cxx_source_compiles("#include <dlfcn.h>
+        int main() { void* h = dlopen(\"x\", RTLD_NOW | RTLD_LOCAL | RTLD_DEEPBIND); return h ? 0 : 1; }"
+        HAVE_RTLD_DEEPBIND)
+    set(CMAKE_REQUIRED_DEFINITIONS "${_saved_cmake_required_definitions}")
+    set(CMAKE_REQUIRED_LIBRARIES "${_saved_cmake_required_libraries}")
+    if (HAVE_RTLD_DEEPBIND)
+        # the names that libldap is opened by: its soname (from the library found), then the common ones
+        set(_ldap_names)
+        find_program(_ldap_readelf NAMES readelf)
+        if (_ldap_readelf)
+            execute_process(COMMAND ${_ldap_readelf} -d ${OpenLDAP_LIB_R}
+                OUTPUT_VARIABLE _ldap_dynamic ERROR_QUIET)
+            string(REGEX MATCH "Library soname: \\[([^]]+)\\]" _ldap_soname_match "${_ldap_dynamic}")
+            if (CMAKE_MATCH_1)
+                list(APPEND _ldap_names "\"${CMAKE_MATCH_1}\"")
+            endif()
+        endif()
+        list(APPEND _ldap_names "\"libldap.so.2\"" "\"libldap_r.so.2\"" "\"${OpenLDAP_LIB_R}\"")
+        list(REMOVE_DUPLICATES _ldap_names)
+        string(REPLACE ";" ", " _ldap_names_str "${_ldap_names}")
+        add_definitions(-DQORE_OPENLDAP_ISOLATE "-DQORE_OPENLDAP_DLOPEN_NAMES=${_ldap_names_str}")
+        set(QORE_OPENLDAP_LINK_LIBS ${CMAKE_DL_LIBS})
+        message(STATUS "OpenLDAP is bound in isolation (RTLD_DEEPBIND), opened as: ${_ldap_names_str}")
+    else()
+        message(STATUS "OpenLDAP is linked directly (no RTLD_DEEPBIND)")
+    endif()
+endif()
+
 # Check for C++11.
 include(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG("-std=c++11" COMPILER_SUPPORTS_CXX11)
@@ -109,7 +148,7 @@ foreach(_ldap_qpp_source IN LISTS QPP_SRC)
     list(APPEND MODULE_DOX_INPUT "${CMAKE_BINARY_DIR}/${_ldap_qpp_name}.dox.h")
 endforeach()
 
-qore_external_binary_module(${module_name} "${PROJECT_VERSION}" ${OpenLDAP_LIB_R})
+qore_external_binary_module(${module_name} "${PROJECT_VERSION}" ${QORE_OPENLDAP_LINK_LIBS})
 
 # Install user modules
 qore_external_user_module("qlib/LdapHelper.qm" "")

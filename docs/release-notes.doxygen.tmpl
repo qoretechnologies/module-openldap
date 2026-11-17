@@ -44,6 +44,10 @@
 
     @subsection openldap_rel20_fixes Bug Fixes
 
+    - The module loads and works when another module that exports <tt>ldap_*</tt> or <tt>ber_*</tt> symbols (the
+      \c oracle module's Oracle client library) was loaded before it: with RTLD_DEEPBIND available (glibc) it binds its
+      own libldap and liblber instead of the symbols of the global scope
+      (<a href="https://github.com/qoretechnologies/qore/issues/1043">issue 1043</a>)
     - Fixed a crash when passing multi-valued attributes to @ref OpenLdap::LdapClient::add() "LdapClient::add()" or
       @ref OpenLdap::LdapClient::modify() "LdapClient::modify()"
     - Fixed @ref OpenLdap::LdapClient::copy() "LdapClient::copy()" failing to authenticate the copied connection
