@@ -40,7 +40,7 @@ module LdapAsync {
 
 /** @mainpage LdapAsync Module
 
-    @section ldapasyncintro Introduction
+    @section ldapasyncintro LdapAsync Module Introduction
 
     This module provides asynchronous LDAP operations using the Qore
     Future/Promise pattern. Each async operation spawns a background thread
@@ -50,6 +50,14 @@ module LdapAsync {
 
     - @ref LdapFuture - Wrapper around Qore's Future with LDAP-specific defaults
     - @ref LdapAsyncClient - Async client providing non-blocking LDAP operations
+
+    @subpage ldapasyncreleasenotes
+*/
+
+/** @page ldapasyncreleasenotes LdapAsync Release Notes
+
+    @section ldapasyncv10 LdapAsync Module Version 1.0
+    - initial release
 */
 
 #! Wrapper around Qore's Future for LDAP operations

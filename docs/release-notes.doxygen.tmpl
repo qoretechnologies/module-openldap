@@ -10,8 +10,7 @@
     @subsection openldap_rel20_overview Overview
 
     Version 2.0 adds transaction support, enterprise authentication, and helper modules for pooling,
-    asynchronous operations, directory administration, and LDIF import/export. It includes all changes
-    previously planned for the unreleased 1.3 version. See @ref openldaphelpermodules for examples.
+    asynchronous operations, directory administration, and LDIF import/export. See @ref openldaphelpermodules for examples.
 
     @subsection openldap_rel20_features New Features
 
@@ -63,18 +62,18 @@
 
     @section openldap_rel122 openldap Module 1.2.2
     - fixed compiling on Fedora 36+ and systems where libldap_r is deprecated
-      (<a href="https://github.com/qorelanguage/qore/issues/4490">issue 4490</a>)
+      (<a href="https://github.com/qoretechnologies/qore/issues/4490">issue 4490</a>)
 
     @section openldap_rel121 openldap Module 1.2.1
     - fixed memory leaks in freeing extension strings
-      (<a href="https://github.com/qorelanguage/qore/issues/4418">issue 4418</a>)
+      (<a href="https://github.com/qoretechnologies/qore/issues/4418">issue 4418</a>)
 
     @section openldap_rel12 openldap Module 1.2
     - updated build to use the latest %Qore APIs
 
     @section openldap_rel111 openldap Module 1.1.1
     - fixed a bug where incorrect class destructor is called in openldap module
-      (<a href="https://github.com/qorelanguage/qore/issues/1174">issue 1174</a>)
+      (<a href="https://github.com/qoretechnologies/qore/issues/1174">issue 1174</a>)
 
     @section openldap_rel11 openldap Module 1.1
     - disable openssl cleanup in the %Qore library since the openldap module makes openssl cleanup calls and calling those routines twice can result in segfaults

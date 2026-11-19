@@ -44,6 +44,14 @@ module LdapActiveDirectory {
     This module provides Active Directory-specific functionality including
     automatic paged search, range retrieval for large multi-valued attributes,
     objectGUID/objectSid decoding, and deleted object search.
+
+    @subpage ldapactivedirectoryreleasenotes
+*/
+
+/** @page ldapactivedirectoryreleasenotes LdapActiveDirectory Release Notes
+
+    @section ldapactivedirectoryv10 LdapActiveDirectory Module Version 1.0
+    - initial release
 */
 
 #! Active Directory client with AD-specific helpers

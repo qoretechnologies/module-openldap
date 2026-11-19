@@ -37,11 +37,19 @@ module LdapCli {
 
 /** @mainpage LdapCli Module
 
-    @section ldapcliintro Introduction
+    @section ldapcliintro LdapCli Module Introduction
 
     This module provides shared constants, helper functions, and classes for
     the qldap* command-line tools (qldapsearch, qldapadd, qldapmodify,
     qldapdelete, qldappasswd, qldapwhoami, qldapcompare).
+
+    @subpage ldapclireleasenotes
+*/
+
+/** @page ldapclireleasenotes LdapCli Release Notes
+
+    @section ldapcliv10 LdapCli Module Version 1.0
+    - initial release
 */
 
 public namespace LdapCli {
