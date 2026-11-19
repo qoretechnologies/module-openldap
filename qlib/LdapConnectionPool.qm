@@ -36,7 +36,7 @@ module LdapConnectionPool {
 
 /** @mainpage LdapConnectionPool Module
 
-    @section ldapconnectionpoolintro Introduction
+    @section ldapconnectionpoolintro LdapConnectionPool Module Introduction
 
     This module provides a connection pool implementation for LDAP connections,
     allowing efficient reuse of connections in multi-threaded applications.
@@ -73,6 +73,14 @@ pool.withConnection(sub(LdapClient ldap) {
     hash<auto> result = ldap.search({"base": "dc=example,dc=com", "filter": "(objectClass=*)"});
 });
     @endcode
+
+    @subpage ldapconnectionpoolreleasenotes
+*/
+
+/** @page ldapconnectionpoolreleasenotes LdapConnectionPool Release Notes
+
+    @section ldapconnectionpoolv10 LdapConnectionPool Module Version 1.0
+    - initial release
 */
 
 #! LDAP connection pool for efficient connection reuse

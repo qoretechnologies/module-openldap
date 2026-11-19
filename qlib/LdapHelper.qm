@@ -36,7 +36,7 @@ module LdapHelper {
 
 /** @mainpage LdapHelper Module
 
-    @section ldaphelperintro Introduction
+    @section ldaphelperintro LdapHelper Module Introduction
 
     This module provides helper classes for working with LDAP entries and
     search results in a more object-oriented manner.
@@ -46,6 +46,14 @@ module LdapHelper {
     - @ref LdapEntry - Represents a single LDAP entry with attribute access
     - @ref LdapSearchIterator - Iterates over search results
     - @ref LdapDn - Parses and manipulates Distinguished Names
+
+    @subpage ldaphelperreleasenotes
+*/
+
+/** @page ldaphelperreleasenotes LdapHelper Release Notes
+
+    @section ldaphelperv10 LdapHelper Module Version 1.0
+    - initial release
 */
 
 #! Represents a single RDN component (type=value pair)

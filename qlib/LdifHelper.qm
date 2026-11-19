@@ -34,10 +34,18 @@ module LdifHelper {
 
 /** @mainpage LdifHelper Module
 
-    @section ldifhelperintro Introduction
+    @section ldifhelperintro LdifHelper Module Introduction
 
     This module provides classes for reading and writing LDIF (LDAP Data
     Interchange Format) files as defined in RFC 2849.
+
+    @subpage ldifhelperreleasenotes
+*/
+
+/** @page ldifhelperreleasenotes LdifHelper Release Notes
+
+    @section ldifhelperv10 LdifHelper Module Version 1.0
+    - initial release
 */
 
 #! Represents an LDIF entry (content record)
